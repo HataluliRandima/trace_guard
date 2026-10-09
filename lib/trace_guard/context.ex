@@ -40,19 +40,26 @@ defmodule TraceGuard.Context do
     events: [],
     seq: 0,
     retained: 0,
-    dropped: 0
+    dropped: 0,
+    # Task propagation (see TraceGuard.Propagation). `role` is :request in the
+    # process that owns the trace and :task in a process running wrapped work.
+    role: :request,
+    tasks: nil
   ]
 
   @type t :: %__MODULE__{
           trace_id: String.t(),
           started_mono: integer(),
-          started_at: DateTime.t(),
+          started_at: DateTime.t() | nil,
           request: map(),
           failure: map() | nil,
           events: [map()],
           seq: non_neg_integer(),
           retained: non_neg_integer(),
-          dropped: non_neg_integer()
+          dropped: non_neg_integer(),
+          role: :request | :task,
+          # Token while the trace is live; a summary map once tasks are merged.
+          tasks: TraceGuard.Propagation.Token.t() | :unavailable | map() | nil
         }
 
   @doc """
@@ -74,6 +81,16 @@ defmodule TraceGuard.Context do
   @doc "Starts a new context in the calling process, replacing any stale one."
   @spec start(String.t(), map()) :: t()
   def start(trace_id, request) when is_binary(trace_id) and is_map(request) do
+    # A stale request context (one whose request never completed, e.g. a
+    # failure TraceGuard could not observe) must not keep its task collector.
+    case current() do
+      %__MODULE__{role: :request, tasks: %TraceGuard.Propagation.Token{} = token} ->
+        TraceGuard.Propagation.discard(token)
+
+      _ ->
+        :ok
+    end
+
     ctx = %__MODULE__{
       trace_id: trace_id,
       started_mono: System.monotonic_time(),

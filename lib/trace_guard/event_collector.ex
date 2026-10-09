@@ -5,7 +5,8 @@ defmodule TraceGuard.EventCollector do
   Every event has the same internal shape:
 
       %{
-        seq: 3,                       # order of observation within the trace
+        seq: 3,                       # order of observation within the process
+        process: "request",           # "request", or "task-N" for propagated work
         name: "ecto.query",
         type: "db",
         at: -576460748160,            # System.monotonic_time() when observed
@@ -20,9 +21,15 @@ defmodule TraceGuard.EventCollector do
   ordinary events are counted in `dropped` and discarded. *Lifecycle* events
   (request start/stop, exceptions, error rendering) are always retained; a
   request emits only a handful of them, so the total stays bounded.
+
+  In a process running wrapped work (`role: :task`, see
+  `TraceGuard.Propagation`), events are not stored locally but sent to the
+  trace's task collector, within a budget of `:max_events` shared by all
+  task processes of the trace. Task lifecycle events count against it.
   """
 
-  alias TraceGuard.{Config, Context}
+  alias TraceGuard.{Config, Context, Propagation}
+  alias TraceGuard.Propagation.Token
 
   @type event_opts :: [
           duration: integer() | nil,
@@ -44,6 +51,23 @@ defmodule TraceGuard.EventCollector do
     end
   end
 
+  defp record_in(%Context{role: :task} = ctx, name, type, metadata, opts) do
+    seq = ctx.seq + 1
+    Context.put(%{ctx | seq: seq})
+
+    event = %{
+      seq: seq,
+      name: name,
+      type: type,
+      at: System.monotonic_time(),
+      duration: Keyword.get(opts, :duration),
+      outcome: Keyword.get(opts, :outcome),
+      metadata: metadata
+    }
+
+    Propagation.send_event(ctx.tasks, event, Config.get().max_events)
+  end
+
   defp record_in(ctx, name, type, metadata, opts) do
     lifecycle? = Keyword.get(opts, :lifecycle, false)
     seq = ctx.seq + 1
@@ -51,6 +75,7 @@ defmodule TraceGuard.EventCollector do
     if lifecycle? or ctx.retained < Config.get().max_events do
       event = %{
         seq: seq,
+        process: "request",
         name: name,
         type: type,
         at: System.monotonic_time(),
@@ -69,6 +94,42 @@ defmodule TraceGuard.EventCollector do
   end
 
   @doc """
+  Returns true if the calling process has an active trace whose buffer can
+  still take an ordinary event. Lets handlers skip building metadata for
+  events that would be dropped.
+  """
+  @spec accepting?() :: boolean()
+  def accepting? do
+    case Context.current() do
+      %Context{role: :task, tasks: token} ->
+        Propagation.accepting?(token, Config.get().max_events)
+
+      %Context{retained: retained} ->
+        retained < Config.get().max_events
+
+      nil ->
+        false
+    end
+  end
+
+  @doc "Counts an ordinary event that was not recorded because the buffer is full."
+  @spec record_dropped() :: :dropped | :no_context
+  def record_dropped do
+    case Context.current() do
+      nil ->
+        :no_context
+
+      %Context{role: :task, tasks: token} ->
+        Propagation.count_dropped(token)
+        :dropped
+
+      ctx ->
+        Context.put(%{ctx | seq: ctx.seq + 1, dropped: ctx.dropped + 1})
+        :dropped
+    end
+  end
+
+  @doc """
   Records failure details on the active context.
 
   The first failure wins: a later, less specific signal (for example the
@@ -78,9 +139,9 @@ defmodule TraceGuard.EventCollector do
   @spec put_failure(map()) :: :ok | :no_context
   def put_failure(failure) when is_map(failure) do
     case Context.current() do
-      nil -> :no_context
-      %{failure: nil} = ctx -> Context.put(%{ctx | failure: failure})
-      _ctx -> :ok
+      %Context{role: :request, failure: nil} = ctx -> Context.put(%{ctx | failure: failure})
+      %Context{role: :request} -> :ok
+      _no_request_context -> :no_context
     end
   end
 
@@ -91,25 +152,69 @@ defmodule TraceGuard.EventCollector do
   request failed: an exception was captured, or `status` is at least
   `:failure_status`. Successful requests leave nothing behind.
 
+  If the request propagated its trace to tasks, the task collector is
+  drained into the report (failed requests, waiting at most
+  `:task_drain_timeout` ms) or discarded without waiting (successful ones).
+  Only the process that owns the trace can complete it.
+
   Returns `{:reported, trace_id}`, `:ok` (no failure) or `:no_context`.
   """
   @spec finish(integer() | nil) :: {:reported, String.t()} | :ok | :no_context
   def finish(status) do
     config = Config.get()
 
-    case Context.take() do
-      nil ->
-        :no_context
+    case Context.current() do
+      %Context{role: :request} ->
+        ctx = Context.take()
 
-      ctx ->
         if failed?(ctx, status, config) do
-          ctx |> TraceGuard.TraceBuilder.build(status, config) |> TraceGuard.ReportStore.put()
+          ctx
+          |> merge_tasks(config)
+          |> TraceGuard.TraceBuilder.build(status, config)
+          |> TraceGuard.ReportStore.put()
+
           {:reported, ctx.trace_id}
         else
+          if match?(%Token{}, ctx.tasks), do: Propagation.discard(ctx.tasks)
           :ok
         end
+
+      _no_request_context ->
+        :no_context
     end
   end
+
+  # Replaces the context's task token by a summary and merges task events,
+  # keeping the trace-wide :max_events limit for ordinary events.
+  defp merge_tasks(%Context{tasks: %Token{} = token} = ctx, config) do
+    case Propagation.drain(token, config.task_drain_timeout) do
+      {:ok, events, dropped} ->
+        room = max(config.max_events - ctx.retained, 0)
+        {kept, extra} = events |> Enum.sort_by(& &1.at) |> Enum.split(room)
+
+        summary = %{
+          status: "complete",
+          processes: kept |> Enum.map(& &1.process) |> Enum.uniq() |> length(),
+          events: length(kept)
+        }
+
+        %{
+          ctx
+          | events: kept ++ ctx.events,
+            dropped: ctx.dropped + dropped + length(extra),
+            tasks: summary
+        }
+
+      {status, dropped} ->
+        summary = %{status: Atom.to_string(status), processes: nil, events: 0}
+        %{ctx | dropped: ctx.dropped + dropped, tasks: summary}
+    end
+  end
+
+  defp merge_tasks(%Context{tasks: :unavailable} = ctx, _config),
+    do: %{ctx | tasks: %{status: "collector_limit_reached", processes: nil, events: 0}}
+
+  defp merge_tasks(ctx, _config), do: ctx
 
   # An exception whose mapped status is below the threshold (for example a
   # 404 from Ecto.NoResultsError) is ordinary control flow, not a failure.
@@ -124,8 +229,11 @@ defmodule TraceGuard.EventCollector do
   @spec put_request_fields(map()) :: :ok | :no_context
   def put_request_fields(fields) when is_map(fields) do
     case Context.current() do
-      nil -> :no_context
-      ctx -> Context.put(%{ctx | request: Map.merge(ctx.request, fields)})
+      %Context{role: :request} = ctx ->
+        Context.put(%{ctx | request: Map.merge(ctx.request, fields)})
+
+      _no_request_context ->
+        :no_context
     end
   end
 end

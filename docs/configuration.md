@@ -37,6 +37,9 @@ is captured unless you opt in.
 | `:response_header` | `"x-traceguard-id"` | Response header that carries the trace ID, or `nil` to disable it. |
 | `:incoming_header` | `nil` | Request header to read an upstream correlation ID from (for example `"x-correlation-id"` or `"traceparent"`). See below. |
 | `:ecto_telemetry_prefixes` | `[]` | Telemetry prefixes of the Ecto repos to observe, such as `[[:my_app, :repo]]`. TraceGuard attaches to `prefix ++ [:query]`. |
+| `:max_task_collectors` | `1_000` | Phase 2. Maximum number of traces that can propagate to tasks at the same time (one collector process each). Beyond that, `TraceGuard.wrap/1` returns the plain function and the report says task events are missing. **Read once at application start.** |
+| `:task_drain_timeout` | `100` | Phase 2. Milliseconds a *failed* request waits for its task events when completing. Successful requests never wait. `0` makes draining effectively non-blocking (and usually empty). |
+| `:task_collector_lifetime` | `300_000` | Phase 2. Maximum lifetime of a task collector in milliseconds, a safety net for requests that never complete. Task events of a request that runs longer are lost. |
 
 ## Redaction
 

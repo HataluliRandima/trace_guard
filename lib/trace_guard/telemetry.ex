@@ -50,10 +50,16 @@ defmodule TraceGuard.Telemetry do
 
   @doc """
   Attaches (or re-attaches) the handlers for the current configuration.
-  Idempotent.
+
+  Idempotent and safe to call concurrently: detach + attach is not atomic in
+  `:telemetry`, so callers are serialized with a node-local lock.
   """
   @spec attach() :: :ok
   def attach do
+    :global.trans({{__MODULE__, :attach}, self()}, &do_attach/0, [node()])
+  end
+
+  defp do_attach do
     detach()
     config = Config.get()
 
@@ -187,7 +193,10 @@ defmodule TraceGuard.Telemetry do
   ## Ecto
 
   defp handle([_ | _] = event, measurements, %{type: :ecto_sql_query} = metadata) do
-    if List.last(event) == :query, do: record_query(measurements, metadata, Config.get())
+    # Check the buffer first so dropped queries cost no metadata building.
+    if List.last(event) == :query and EventCollector.accepting?(),
+      do: record_query(measurements, metadata, Config.get()),
+      else: EventCollector.record_dropped()
   end
 
   defp handle(_event, _measurements, _metadata), do: :ok
@@ -267,7 +276,17 @@ defmodule TraceGuard.Telemetry do
     }
   end
 
-  defp module_name(module) when is_atom(module) and not is_nil(module), do: inspect(module)
+  # inspect/1 on a module validates the alias segment by segment, which was
+  # the largest TraceGuard cost on simple requests when profiled.
+  defp module_name(nil), do: nil
+
+  defp module_name(module) when is_atom(module) do
+    case Atom.to_string(module) do
+      "Elixir." <> name -> name
+      _ -> inspect(module)
+    end
+  end
+
   defp module_name(_), do: nil
 
   defp us(nil), do: nil

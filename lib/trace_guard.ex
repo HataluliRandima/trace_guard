@@ -35,11 +35,12 @@ defmodule TraceGuard do
                        "incoming_id", "headers"},
         "response" => %{"status" => integer | nil},
         "duration_us" => integer,
-        "events" => [%{"seq", "name", "type", "offset_us", "duration_us",
-                       "outcome", "metadata"}],
+        "events" => [%{"seq", "process", "name", "type", "offset_us",
+                       "duration_us", "outcome", "metadata"}],
         "events_dropped" => integer,
         "failure" => nil | %{"kind", "exception", "message", "plug_status",
                              "stacktrace", "captured_by"},
+        "tasks" => nil | %{"status", "processes", "events"},
         "redaction" => %{"applied", "placeholder", "sensitive_keys",
                          "redacted_values", "scrubbed_message_values"},
         "limitations" => [String.t()]
@@ -61,6 +62,24 @@ defmodule TraceGuard do
       nil -> nil
     end
   end
+
+  @doc """
+  Binds `fun` to the calling process's trace, so that events emitted while
+  it runs in another process (typically a `Task`) join that trace.
+
+      Task.async(TraceGuard.wrap(fn -> Repo.all(Product) end))
+      Task.async_stream(ids, TraceGuard.wrap(fn id -> Repo.get(Product, id) end))
+
+  Accepts functions of arity 0 or 1. Returns `fun` unchanged when the
+  calling process has no active trace, so it is safe to use anywhere.
+
+  The wrapper preserves `fun`'s result and failures exactly (it re-raises
+  with the original stacktrace). Only the trace ID and an internal collector
+  reference are propagated; nothing else from the calling process is copied.
+  See `TraceGuard.Propagation` for the full contract.
+  """
+  @spec wrap(fun) :: fun when fun: (-> any) | (any -> any)
+  defdelegate wrap(fun), to: TraceGuard.Propagation
 
   @doc """
   Fetches the stored report for a failed request.

@@ -112,6 +112,51 @@ defmodule TraceGuardDemoWeb.DiagnosticsTest do
     end
   end
 
+  describe "Task propagation (TraceGuard.wrap/1)" do
+    test "a successful parallel catalog produces no report and the same data", %{conn: conn} do
+      sequential = json_response(get(conn, ~p"/api/catalog"), 200)
+      parallel = json_response(get(build_conn(), ~p"/api/catalog/parallel"), 200)
+      assert parallel == sequential
+      assert TraceGuard.list_reports() == []
+    end
+
+    @tag :capture_log
+    test "a failing child task's queries and exception are in the request's report",
+         %{conn: conn} do
+      {500, headers, body} =
+        assert_error_sent(500, fn -> post(conn, ~p"/api/inventory/reconcile") end)
+
+      assert Jason.decode!(body) == %{"errors" => %{"detail" => "Internal Server Error"}}
+
+      # Task.await exits the request process; Phoenix renders exits with the
+      # endpoint's original conn, so the trace header is absent (documented).
+      assert trace_id(headers) == nil
+      [%{"trace_id" => id, "route" => "/api/inventory/reconcile"}] = TraceGuard.list_reports()
+      report = fetch_report!(id)
+
+      assert report["failure"]["kind"] == "exit"
+      assert report["failure"]["exception"] == "TraceGuardDemo.Shop.WarehouseError"
+
+      assert report["failure"]["message"] ==
+               "Task.await/2 exited: process crashed: warehouse feed timed out " <>
+                 "after 3 retries (feed_token=[REDACTED])"
+
+      assert report["tasks"]["status"] == "complete"
+      assert report["tasks"]["processes"] == 2
+
+      task_queries =
+        for %{"name" => "ecto.query", "process" => "task-" <> _} = e <- report["events"],
+            do: e["metadata"]["source"]
+
+      assert Enum.sort(task_queries) == ["products", "products"]
+
+      assert %{"metadata" => %{"exception" => "TraceGuardDemo.Shop.WarehouseError"}} =
+               Enum.find(report["events"], &(&1["name"] == "task.exception"))
+
+      refute Jason.encode!(report) =~ "wf_demo_42"
+    end
+  end
+
   test "an error response without an exception is reported with its queries", %{conn: conn} do
     conn = post(conn, ~p"/api/inventory/sync")
     assert json_response(conn, 503)

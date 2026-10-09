@@ -63,6 +63,13 @@ defmodule TraceGuardDemoWeb.HttpServerTest do
     assert [sql] = ecto_sql(report)
     assert sql =~ "FROM \"products\""
 
+    # Wrapped tasks under Bandit: the child's failure and queries are kept.
+    {500, h4, _} = request(:post, base <> "/api/inventory/reconcile", [], "{}")
+    assert trace_id(h4) == nil
+    reconcile = fetch_report_for_route!("/api/inventory/reconcile")
+    assert reconcile["tasks"]["processes"] == 2
+    assert Enum.any?(reconcile["events"], &(&1["name"] == "task.exception"))
+
     # The dev endpoint serves the same report over HTTP.
     {200, _, served} = request(:get, base <> "/dev/traces/" <> first)
     assert Jason.decode!(served)["trace_id"] == first

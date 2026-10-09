@@ -6,9 +6,18 @@ defmodule TraceGuard.Application do
   @impl true
   def start(_type, _args) do
     # Fail fast on invalid configuration, then attach telemetry handlers.
-    TraceGuard.Config.load!()
+    config = TraceGuard.Config.load!()
 
-    children = [TraceGuard.ReportStore]
+    children = [
+      TraceGuard.ReportStore,
+      Supervisor.child_spec(
+        {DynamicSupervisor,
+         name: TraceGuard.TaskCollectors,
+         strategy: :one_for_one,
+         max_children: config.max_task_collectors},
+        id: TraceGuard.TaskCollectors
+      )
+    ]
 
     with {:ok, pid} <-
            Supervisor.start_link(children, strategy: :one_for_one, name: TraceGuard.Supervisor) do

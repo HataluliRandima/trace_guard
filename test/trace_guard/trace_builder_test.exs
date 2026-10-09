@@ -3,6 +3,10 @@ defmodule TraceGuard.TraceBuilderTest do
 
   alias TraceGuard.{Config, Context, TraceBuilder}
 
+  defmodule CardError do
+    defexception [:message, :card_number]
+  end
+
   defmodule BadMessage do
     defexception [:password]
     def message(_), do: raise("nope")
@@ -128,6 +132,35 @@ defmodule TraceGuard.TraceBuilderTest do
     test "survives exceptions whose message/1 raises" do
       failure = TraceBuilder.failure(:error, %BadMessage{password: "pw-123"}, [], "src", config())
       assert failure.message == "(message unavailable: message/1 raised)"
+    end
+
+    test "exit and throw reasons are described, never inspected" do
+      crash = %CardError{message: "card declined", card_number: "4242424242424242"}
+      stack = [{M, :f, 1, []}]
+      task = %{pid: self(), owner: self(), password: "pw"}
+
+      cases = [
+        # Task.await/2 on a crashed task
+        {:exit, {{crash, stack}, {Task, :await, [task, 5000]}},
+         "TraceGuard.TraceBuilderTest.CardError",
+         "Task.await/2 exited: process crashed: card declined"},
+        {:exit, {crash, stack}, "TraceGuard.TraceBuilderTest.CardError",
+         "process crashed: card declined"},
+        {:exit, :timeout, nil, "exit: :timeout"},
+        {:exit, {:shutdown, %{password: "pw"}}, nil,
+         "exit: {:shutdown, _} (details not captured)"},
+        {:exit, %{card_number: "4242424242424242"}, nil,
+         "exit with a map reason (reason not captured)"},
+        {:throw, %{password: "pw"}, nil, "throw of a map value (value not captured)"}
+      ]
+
+      for {kind, reason, exception, message} <- cases do
+        failure = TraceBuilder.failure(kind, reason, [], "src", config())
+        assert failure.exception == exception
+        assert failure.message == message
+        refute inspect(failure) =~ "4242"
+        refute inspect(failure) =~ "pw"
+      end
     end
 
     test "limits stacktrace frames" do

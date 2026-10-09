@@ -11,6 +11,9 @@ The business logic (`lib/trace_guard_demo/shop.ex`, `payments.ex`) contains
 * the `config :trace_guard, ...` block in `config/config.exs`;
 * `stacktrace: true` on the repo (dev/test), so query events can name their
   calling function.
+* `TraceGuard.wrap/1` around the tasks in `Shop.catalog_summary_parallel/0`
+  and `Shop.reconcile_inventory/0`. This is the only TraceGuard call in the
+  business logic, and it is opt-in.
 
 ## Endpoints
 
@@ -20,6 +23,10 @@ The business logic (`lib/trace_guard_demo/shop.ex`, `payments.ex`) contains
 | `GET /api/products` | Real `SELECT` through Ecto. No report. |
 | `POST /api/checkout` | **Deliberate failure.** Inside a transaction: `begin`, select the product, decrement stock, insert an order, then the stub payment gateway raises `GatewayError` (its message contains a merchant API key). Ecto rolls back and Phoenix returns a generic JSON 500. Reported. |
 | `POST /api/inventory/sync` | Reads the catalogue, then returns `503` without raising. Reported as `error_status`. |
+| `GET /api/catalog` | 4 read queries in the request process. No report. |
+| `GET /api/catalog/parallel` | The same 4 queries, each in a `Task` wrapped with `TraceGuard.wrap/1`. No report. |
+| `POST /api/inventory/reconcile` | **Deliberate failure in a child task.** Two unlinked wrapped tasks read stock; the "warehouse feed" task raises `WarehouseError`. `Task.await/2` exits the request process, and Phoenix returns a generic 500. Reported, with both tasks' events. |
+| `GET /api/inventory/audit` | 151 single-row queries (an N+1 pattern), which overflows the 100-event buffer. Used by the benchmark. |
 | `GET /dev/traces` | List of stored reports (dev/test only). |
 | `GET /dev/traces/:trace_id` | One full report (dev/test only). |
 
@@ -40,7 +47,7 @@ mix phx.server     # http://localhost:4000
 In a second terminal:
 
 ```bash
-./scripts/run_demo.sh report.json
+./scripts/run_demo.sh report.json task_report.json
 ```
 
 Or by hand:
@@ -62,6 +69,18 @@ TraceGuard.list_reports()
 TraceGuard.export_json("<id>", pretty: true)
 ```
 
+## Benchmark
+
+```bash
+MIX_ENV=bench mix bench.requests                       # writes bench/results/latest.md
+MIX_ENV=bench mix run --no-start bench/event_cost.exs
+```
+
+`config/bench.exs` is a production-like environment with its own SQLite
+database. The method and results are in
+[../docs/performance.md](../docs/performance.md); the raw result files of
+every run cited there are in `bench/results/`.
+
 ## Tests
 
 ```bash
@@ -75,8 +94,10 @@ mix test
   ordered timeline (`begin` → `SELECT` → `UPDATE` → `INSERT` → `rollback` →
   exception); the rollback actually happening; absence of the five sensitive
   values; the 503 path; the dev endpoint; and 10 concurrent failing requests
-  each getting only their own events.
+  each getting only their own events. It also covers the parallel catalog (no
+  report, same data) and the reconcile failure: task events from two
+  processes, the child's exception, and the scrubbed message.
 * `http_server_test.exs`: starts the endpoint under a real Bandit server on a
-  random port and sends failure → success → failure sequentially with
-  `:httpc`, so requests are handled by Bandit's own processes and the
-  re-raised exception reaches Bandit.
+  random port and sends failure → success → failure → task failure
+  sequentially with `:httpc`, so requests are handled by Bandit's own
+  processes and the re-raised exception or exit reaches Bandit.

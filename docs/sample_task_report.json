@@ -1,0 +1,335 @@
+{
+    "duration_us": 36987,
+    "events": [
+        {
+            "duration_us": null,
+            "metadata": {},
+            "name": "request.start",
+            "offset_us": 20,
+            "outcome": null,
+            "process": "request",
+            "seq": 1,
+            "type": "request"
+        },
+        {
+            "duration_us": null,
+            "metadata": {},
+            "name": "phoenix.endpoint.start",
+            "offset_us": 56,
+            "outcome": null,
+            "process": "request",
+            "seq": 2,
+            "type": "endpoint"
+        },
+        {
+            "duration_us": null,
+            "metadata": {
+                "action": "reconcile",
+                "pipe_through": [
+                    "api"
+                ],
+                "plug": "TraceGuardDemoWeb.InventoryController",
+                "route": "/api/inventory/reconcile"
+            },
+            "name": "phoenix.router_dispatch.start",
+            "offset_us": 3026,
+            "outcome": null,
+            "process": "request",
+            "seq": 3,
+            "type": "router"
+        },
+        {
+            "duration_us": null,
+            "metadata": {},
+            "name": "task.start",
+            "offset_us": 14472,
+            "outcome": null,
+            "process": "task-1",
+            "seq": 4,
+            "type": "task"
+        },
+        {
+            "duration_us": null,
+            "metadata": {},
+            "name": "task.start",
+            "offset_us": 14545,
+            "outcome": null,
+            "process": "task-2",
+            "seq": 5,
+            "type": "task"
+        },
+        {
+            "duration_us": 293,
+            "metadata": {
+                "decode_time_us": 1,
+                "num_rows": 2,
+                "origin": "TraceGuard.Propagation.run_in_task_context/4 (lib/trace_guard/propagation.ex:140)",
+                "query_time_us": 243,
+                "queue_time_us": 47,
+                "repo": "TraceGuardDemo.Repo",
+                "source": "products",
+                "sql": "SELECT p0.\"id\", p0.\"sku\", p0.\"name\", p0.\"price_cents\", p0.\"stock\", p0.\"inserted_at\", p0.\"updated_at\" FROM \"products\" AS p0 ORDER BY p0.\"id\""
+            },
+            "name": "ecto.query",
+            "offset_us": 14861,
+            "outcome": "ok",
+            "process": "task-1",
+            "seq": 6,
+            "type": "db"
+        },
+        {
+            "duration_us": 4195,
+            "metadata": {},
+            "name": "task.stop",
+            "offset_us": 18672,
+            "outcome": "ok",
+            "process": "task-1",
+            "seq": 7,
+            "type": "task"
+        },
+        {
+            "duration_us": 994,
+            "metadata": {
+                "decode_time_us": 1,
+                "num_rows": 1,
+                "origin": "TraceGuardDemo.Shop.-reconcile_inventory/0-fun-1-/0 (lib/trace_guard_demo/shop.ex:78)",
+                "query_time_us": 514,
+                "queue_time_us": 478,
+                "repo": "TraceGuardDemo.Repo",
+                "source": "products",
+                "sql": "SELECT sum(p0.\"stock\") FROM \"products\" AS p0"
+            },
+            "name": "ecto.query",
+            "offset_us": 19407,
+            "outcome": "ok",
+            "process": "task-2",
+            "seq": 8,
+            "type": "db"
+        },
+        {
+            "duration_us": 11132,
+            "metadata": {
+                "exception": "TraceGuardDemo.Shop.WarehouseError",
+                "kind": "error"
+            },
+            "name": "task.exception",
+            "offset_us": 25684,
+            "outcome": "error",
+            "process": "task-2",
+            "seq": 9,
+            "type": "task"
+        },
+        {
+            "duration_us": 32476,
+            "metadata": {
+                "action": "reconcile",
+                "exception": "TraceGuardDemo.Shop.WarehouseError",
+                "kind": "exit",
+                "pipe_through": [
+                    "api"
+                ],
+                "plug": "TraceGuardDemoWeb.InventoryController",
+                "route": "/api/inventory/reconcile"
+            },
+            "name": "phoenix.router_dispatch.exception",
+            "offset_us": 35755,
+            "outcome": "error",
+            "process": "request",
+            "seq": 10,
+            "type": "exception"
+        },
+        {
+            "duration_us": null,
+            "metadata": {
+                "exception": "TraceGuardDemo.Shop.WarehouseError",
+                "kind": "exit",
+                "status": 500
+            },
+            "name": "phoenix.error_rendered",
+            "offset_us": 36735,
+            "outcome": "error",
+            "process": "request",
+            "seq": 11,
+            "type": "exception"
+        }
+    ],
+    "events_dropped": 0,
+    "failure": {
+        "captured_by": "phoenix.router_dispatch.exception",
+        "exception": "TraceGuardDemo.Shop.WarehouseError",
+        "kind": "exit",
+        "message": "Task.await/2 exited: process crashed: warehouse feed timed out after 3 retries (feed_token=[REDACTED])",
+        "plug_status": null,
+        "stacktrace": [
+            {
+                "application": "elixir",
+                "file": "lib/task.ex",
+                "function": "await_receive/3",
+                "line": 884,
+                "module": "Task"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo/shop.ex",
+                "function": "reconcile_inventory/0",
+                "line": 83,
+                "module": "TraceGuardDemo.Shop"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/controllers/inventory_controller.ex",
+                "function": "reconcile/2",
+                "line": 10,
+                "module": "TraceGuardDemoWeb.InventoryController"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/controllers/inventory_controller.ex",
+                "function": "action/2",
+                "line": 1,
+                "module": "TraceGuardDemoWeb.InventoryController"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/controllers/inventory_controller.ex",
+                "function": "phoenix_controller_pipeline/2",
+                "line": 1,
+                "module": "TraceGuardDemoWeb.InventoryController"
+            },
+            {
+                "application": "phoenix",
+                "file": "lib/phoenix/router.ex",
+                "function": "__call__/5",
+                "line": 428,
+                "module": "Phoenix.Router"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/endpoint.ex",
+                "function": "plug_builder_call/2",
+                "line": 1,
+                "module": "TraceGuardDemoWeb.Endpoint"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/endpoint.ex",
+                "function": "call/2",
+                "line": 1,
+                "module": "TraceGuardDemoWeb.Endpoint"
+            },
+            {
+                "application": "phoenix",
+                "file": "lib/phoenix/endpoint/sync_code_reload_plug.ex",
+                "function": "do_call/4",
+                "line": 22,
+                "module": "Phoenix.Endpoint.SyncCodeReloadPlug"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/pipeline.ex",
+                "function": "call_plug!/2",
+                "line": 129,
+                "module": "Bandit.Pipeline"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/pipeline.ex",
+                "function": "run/5",
+                "line": 42,
+                "module": "Bandit.Pipeline"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/http1/handler.ex",
+                "function": "handle_data/3",
+                "line": 23,
+                "module": "Bandit.HTTP1.Handler"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/delegating_handler.ex",
+                "function": "handle_data/3",
+                "line": 18,
+                "module": "Bandit.DelegatingHandler"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/delegating_handler.ex",
+                "function": "handle_continue/2",
+                "line": 8,
+                "module": "Bandit.DelegatingHandler"
+            },
+            {
+                "application": "stdlib",
+                "file": "gen_server.erl",
+                "function": "try_handle_continue/3",
+                "line": 1067,
+                "module": ":gen_server"
+            },
+            {
+                "application": "stdlib",
+                "file": "gen_server.erl",
+                "function": "loop/7",
+                "line": 977,
+                "module": ":gen_server"
+            },
+            {
+                "application": "stdlib",
+                "file": "proc_lib.erl",
+                "function": "init_p_do_apply/3",
+                "line": 241,
+                "module": ":proc_lib"
+            }
+        ]
+    },
+    "generated_at": "2026-10-09T21:49:31.175833Z",
+    "limitations": [
+        "Only telemetry events emitted by the request-handling process, or by functions wrapped with TraceGuard.wrap/1, are included; work in other processes (plain Task, GenServer, etc.) is not correlated.",
+        "Individual function calls are not traced; the timeline contains only the Phoenix and Ecto telemetry events listed in the report.",
+        "Request bodies, query strings, cookies and SQL parameter values are never captured.",
+        "Task events are included only if they reached TraceGuard before the request completed; work still running at that point is not shown."
+    ],
+    "outcome": "exception",
+    "redaction": {
+        "applied": true,
+        "placeholder": "[REDACTED]",
+        "redacted_values": 0,
+        "scrubbed_message_values": 1,
+        "sensitive_keys": [
+            "password",
+            "authorization",
+            "token",
+            "access_token",
+            "refresh_token",
+            "secret",
+            "api_key",
+            "cookie",
+            "private_key",
+            "card_number",
+            "cvc"
+        ]
+    },
+    "request": {
+        "headers": {
+            "accept": "*/*",
+            "content-type": "application/json",
+            "user-agent": "curl/8.5.0"
+        },
+        "incoming_id": null,
+        "method": "POST",
+        "path": null,
+        "request_id": "GNz62zKBpRJDfjkAAAGF",
+        "route": "/api/inventory/reconcile",
+        "started_at": "2026-10-09T21:49:31.138839Z"
+    },
+    "response": {
+        "status": 500
+    },
+    "schema": "traceguard.report/v1",
+    "tasks": {
+        "events": 6,
+        "processes": 2,
+        "status": "complete"
+    },
+    "trace_id": "c59afd43abd74755b9ee5ec51e64d0bc"
+}

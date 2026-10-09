@@ -50,4 +50,23 @@ defmodule TraceGuard.TestHelpers do
   end
 
   def event_names(report), do: Enum.map(report["events"], & &1["name"])
+
+  def query_sources(report) do
+    for %{"name" => "ecto.query"} = e <- report["events"], do: e["metadata"]["source"]
+  end
+
+  def task_collector_count do
+    DynamicSupervisor.count_children(TraceGuard.TaskCollectors).active
+  end
+
+  @doc "Blocks until `pid` has exited (no sleeps)."
+  def await_exit(pid, timeout \\ 1_000) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _} -> :ok
+    after
+      timeout -> raise "process #{inspect(pid)} still alive after #{timeout} ms"
+    end
+  end
 end

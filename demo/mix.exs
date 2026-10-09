@@ -26,7 +26,7 @@ defmodule TraceGuardDemo.MixProject do
 
   def cli do
     [
-      preferred_envs: [precommit: :test]
+      preferred_envs: [precommit: :test, "bench.requests": :bench]
     ]
   end
 
@@ -48,7 +48,8 @@ defmodule TraceGuardDemo.MixProject do
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      {:benchee, "~> 1.3", only: :bench}
     ]
   end
 
@@ -61,6 +62,11 @@ defmodule TraceGuardDemo.MixProject do
   defp aliases do
     [
       setup: ["deps.get", "ecto.setup"],
+      "bench.requests": [
+        "ecto.create --quiet",
+        "ecto.migrate --quiet",
+        "run --no-start bench/request_overhead.exs"
+      ],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],

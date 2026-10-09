@@ -59,12 +59,18 @@ defmodule TraceGuard.Redactor do
   Keys that are neither atoms nor strings are never sensitive.
   """
   @spec sensitive?(term(), [String.t()]) :: boolean()
-  def sensitive?(key, sensitive_keys) when is_atom(key) or is_binary(key) do
+  def sensitive?(key, sensitive_keys), do: matches?(key, needles(sensitive_keys))
+
+  # Each sensitive key is split into tokens once per call, not once per key
+  # compared (profiling showed the repeated splitting dominating report builds).
+  defp needles(sensitive_keys), do: Enum.map(sensitive_keys, &String.split(&1, "_", trim: true))
+
+  defp matches?(key, needles) when is_atom(key) or is_binary(key) do
     tokens = key |> normalize_key() |> String.split("_", trim: true)
-    Enum.any?(sensitive_keys, &contains_tokens?(tokens, String.split(&1, "_", trim: true)))
+    Enum.any?(needles, &contains_tokens?(tokens, &1))
   end
 
-  def sensitive?(_key, _sensitive_keys), do: false
+  defp matches?(_key, _needles), do: false
 
   defp contains_tokens?(_tokens, []), do: false
   defp contains_tokens?(tokens, needle) when length(tokens) < length(needle), do: false
@@ -79,49 +85,66 @@ defmodule TraceGuard.Redactor do
   Returns `{redacted_term, number_of_redacted_values}`.
   """
   @spec redact(term(), [String.t()]) :: {term(), non_neg_integer()}
-  def redact(term, sensitive_keys), do: do_redact(term, sensitive_keys, 0)
+  def redact(term, sensitive_keys) do
+    # The accumulator memoizes the verdict per distinct key: reports repeat
+    # the same keys (event and stack-frame fields) many times.
+    {term, {count, _memo}} = do_redact(term, needles(sensitive_keys), {0, %{}})
+    {term, count}
+  end
 
-  defp do_redact(%_{} = struct, keys, count),
-    do: struct |> Map.from_struct() |> do_redact(keys, count)
+  defp do_redact(%_{} = struct, needles, acc),
+    do: struct |> Map.from_struct() |> do_redact(needles, acc)
 
-  defp do_redact(map, keys, count) when is_map(map) do
-    {pairs, count} =
-      Enum.map_reduce(map, count, fn {key, value}, acc ->
-        redact_pair(key, value, keys, acc)
+  defp do_redact(map, needles, acc) when is_map(map) do
+    {pairs, acc} =
+      Enum.map_reduce(map, acc, fn {key, value}, acc ->
+        redact_pair(key, value, needles, acc)
       end)
 
-    {Map.new(pairs), count}
+    {Map.new(pairs), acc}
   end
 
-  defp do_redact(list, keys, count) when is_list(list) do
-    redact_list(list, keys, count, [])
+  defp do_redact(list, needles, acc) when is_list(list) do
+    redact_list(list, needles, acc, [])
   end
 
-  defp do_redact({key, value}, keys, count) when is_atom(key) or is_binary(key) do
-    redact_pair(key, value, keys, count)
+  defp do_redact({key, value}, needles, acc) when is_atom(key) or is_binary(key) do
+    redact_pair(key, value, needles, acc)
   end
 
-  defp do_redact(other, _keys, count), do: {other, count}
+  defp do_redact(other, _needles, acc), do: {other, acc}
 
   # Handles proper and improper lists without assuming they are proper.
-  defp redact_list([head | tail], keys, count, acc) do
-    {head, count} = do_redact(head, keys, count)
-    redact_list(tail, keys, count, [head | acc])
+  defp redact_list([head | tail], needles, acc, out) do
+    {head, acc} = do_redact(head, needles, acc)
+    redact_list(tail, needles, acc, [head | out])
   end
 
-  defp redact_list([], _keys, count, acc), do: {Enum.reverse(acc), count}
+  defp redact_list([], _needles, acc, out), do: {Enum.reverse(out), acc}
 
-  defp redact_list(improper_tail, keys, count, acc) do
-    {tail, count} = do_redact(improper_tail, keys, count)
-    {Enum.reverse(acc) ++ tail, count}
+  defp redact_list(improper_tail, needles, acc, out) do
+    {tail, acc} = do_redact(improper_tail, needles, acc)
+    {Enum.reverse(out) ++ tail, acc}
   end
 
-  defp redact_pair(key, value, keys, count) do
-    if sensitive?(key, keys) do
-      {{key, @redacted}, count + 1}
+  defp redact_pair(key, value, needles, {count, memo}) do
+    {sensitive?, memo} =
+      case memo do
+        %{^key => verdict} ->
+          {verdict, memo}
+
+        _ ->
+          verdict = matches?(key, needles)
+
+          {verdict,
+           if(is_atom(key) or is_binary(key), do: Map.put(memo, key, verdict), else: memo)}
+      end
+
+    if sensitive? do
+      {{key, @redacted}, {count + 1, memo}}
     else
-      {value, count} = do_redact(value, keys, count)
-      {{key, value}, count}
+      {value, acc} = do_redact(value, needles, {count, memo})
+      {{key, value}, acc}
     end
   end
 
@@ -159,7 +182,23 @@ defmodule TraceGuard.Redactor do
 
   defp key_value_regex([]), do: nil
 
+  # Compiled once per distinct key list and cached; the key list only changes
+  # with configuration, so the number of cached entries stays tiny.
   defp key_value_regex(sensitive_keys) do
+    cache_key = {__MODULE__, :key_value_regex, sensitive_keys}
+
+    case :persistent_term.get(cache_key, nil) do
+      nil ->
+        regex = compile_key_value_regex(sensitive_keys)
+        :persistent_term.put(cache_key, regex)
+        regex
+
+      regex ->
+        regex
+    end
+  end
+
+  defp compile_key_value_regex(sensitive_keys) do
     alternatives =
       sensitive_keys
       |> Enum.map(fn key ->

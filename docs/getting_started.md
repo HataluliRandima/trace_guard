@@ -108,7 +108,28 @@ is being handled.
 The full report structure is described in
 [architecture.md](architecture.md#report-structure).
 
-## 6. Optional: expose reports in development
+## 6. Optional: include work done in Tasks
+
+Events from processes other than the request process are not part of the
+trace unless you opt them in. Wrap the function in the request process:
+
+```elixir
+def dashboard(conn, _params) do
+  [orders, stats] =
+    [fn -> Orders.recent() end, fn -> Stats.compute() end]
+    |> Enum.map(&Task.async(TraceGuard.wrap(&1)))
+    |> Task.await_many()
+
+  json(conn, %{orders: orders, stats: stats})
+end
+```
+
+If a task may crash, prefer `Task.Supervisor.async_nolink/3`. A linked task
+crash kills the request process before any error can be rendered or
+reported. See [task_propagation.md](task_propagation.md) for the full
+contract, limits and unsupported cases.
+
+## 7. Optional: expose reports in development
 
 The demo app adds a development-only controller (see
 `demo/lib/trace_guard_demo_web/controllers/trace_report_controller.ex`) that

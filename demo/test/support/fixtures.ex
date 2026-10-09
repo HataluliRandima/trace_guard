@@ -59,6 +59,24 @@ defmodule TraceGuardDemo.Fixtures do
     end
   end
 
+  @doc """
+  For responses without an x-traceguard-id header (exits, throws): waits
+  for the asynchronously stored report of `route` and returns it.
+  """
+  def fetch_report_for_route!(route, attempts \\ 50) do
+    case Enum.find(TraceGuard.list_reports(), &(&1["route"] == route)) do
+      %{"trace_id" => id} ->
+        fetch_report!(id)
+
+      nil when attempts > 0 ->
+        Process.sleep(2)
+        fetch_report_for_route!(route, attempts - 1)
+
+      nil ->
+        raise "no report for route #{route}"
+    end
+  end
+
   def ecto_sql(report) do
     for %{"name" => "ecto.query", "metadata" => meta} <- report["events"], do: meta["sql"]
   end

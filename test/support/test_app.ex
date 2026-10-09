@@ -108,6 +108,106 @@ defmodule TraceGuard.TestApp.Controller do
     send_resp(conn, 500, "spawned")
   end
 
+  ## Task propagation
+
+  # Two wrapped tasks and one unwrapped task, all awaited.
+  def tasks_await(conn, %{"tag" => tag, "fail" => fail}) do
+    wrapped =
+      for suffix <- ["a", "b"] do
+        Task.async(TraceGuard.wrap(fn -> TestApp.emit_query("#{tag}_task_#{suffix}") end))
+      end
+
+    unwrapped = Task.async(fn -> TestApp.emit_query("#{tag}_unwrapped") end)
+    Task.await_many([unwrapped | wrapped])
+    TestApp.emit_query("#{tag}_request")
+
+    if fail == "true", do: raise(TestApp.BoomError, message: "tasks failed in #{tag}")
+    json(conn, %{tag: tag})
+  end
+
+  # A wrapped task that wraps again for a grandchild.
+  def tasks_nested(conn, _params) do
+    Task.async(
+      TraceGuard.wrap(fn ->
+        TestApp.emit_query("child")
+        Task.async(TraceGuard.wrap(fn -> TestApp.emit_query("grandchild") end)) |> Task.await()
+      end)
+    )
+    |> Task.await()
+
+    send_resp(conn, 500, "nested")
+  end
+
+  # Repeated wrap calls and an arity-1 wrapped function in async_stream.
+  def tasks_repeated(conn, _params) do
+    first = Task.async(TraceGuard.wrap(fn -> TestApp.emit_query("first") end))
+    second = Task.async(TraceGuard.wrap(fn -> TestApp.emit_query("second") end))
+    Task.await_many([first, second])
+
+    ["s1", "s2", "s3"]
+    |> Task.async_stream(TraceGuard.wrap(fn source -> TestApp.emit_query(source) end))
+    |> Stream.run()
+
+    send_resp(conn, 500, "repeated")
+  end
+
+  # The child raises under an unlinked supervisor; awaiting it exits the
+  # request process, which Phoenix renders as a 500.
+  def tasks_child_fails(_conn, _params) do
+    TraceGuard.TestApp.TaskSup
+    |> Task.Supervisor.async_nolink(
+      TraceGuard.wrap(fn ->
+        TestApp.emit_query("before_child_failure")
+        raise TestApp.BoomError, message: "child failed with token=abc123"
+      end)
+    )
+    |> Task.await()
+  end
+
+  # Fire-and-forget task that only proceeds when the test says so, i.e.
+  # after this request has completed.
+  def tasks_late(conn, _params) do
+    test_pid = self()
+
+    Task.start(
+      TraceGuard.wrap(fn ->
+        send(test_pid, {:late_child_ready, self()})
+
+        receive do
+          :go -> TestApp.emit_query("late_child")
+        end
+
+        send(test_pid, :late_child_done)
+      end)
+    )
+
+    receive do
+      {:late_child_ready, child} -> send(test_pid, {:late_child, child})
+    end
+
+    TestApp.emit_query("request_before_late_child")
+    send_resp(conn, 500, "responded before the child ran")
+  end
+
+  def tasks_flood(conn, %{"n" => n}) do
+    n = String.to_integer(n)
+
+    1..4
+    |> Enum.map(fn worker ->
+      Task.async(
+        TraceGuard.wrap(fn -> for i <- 1..n, do: TestApp.emit_query("w#{worker}_#{i}") end)
+      )
+    end)
+    |> Task.await_many()
+
+    send_resp(conn, 500, "flooded")
+  end
+
+  def tasks_ok(conn, _params) do
+    Task.async(TraceGuard.wrap(fn -> TestApp.emit_query("ok_task") end)) |> Task.await()
+    json(conn, %{ok: true})
+  end
+
   def send_then_crash(conn, _params) do
     conn = send_resp(conn, 200, "sent")
     raise TestApp.BoomError, message: "after send"
@@ -135,6 +235,13 @@ defmodule TraceGuard.TestApp.Router do
     get "/spawn", Controller, :spawn_query
     get "/send_then_crash", Controller, :send_then_crash
     get "/users/:id", Controller, :ok
+    get "/tasks/await/:tag/:fail", Controller, :tasks_await
+    get "/tasks/nested", Controller, :tasks_nested
+    get "/tasks/repeated", Controller, :tasks_repeated
+    get "/tasks/child_fails", Controller, :tasks_child_fails
+    get "/tasks/late", Controller, :tasks_late
+    get "/tasks/flood/:n", Controller, :tasks_flood
+    get "/tasks/ok", Controller, :tasks_ok
   end
 end
 

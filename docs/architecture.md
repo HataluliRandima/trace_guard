@@ -19,6 +19,8 @@ Phoenix 1.8.15, Plug 1.20.3, Ecto SQL 3.14.0 and Bandit 1.12.5.
 | `TraceGuard.Redactor` | Key normalization, recursive redaction, message scrubbing. |
 | `TraceGuard.ReportStore` | Bounded in-memory GenServer of finished, redacted reports. |
 | `TraceGuard.Exporter.JSON` | Jason encoding and file export. |
+| `TraceGuard.Propagation` | `wrap/1`: opt-in propagation of a trace into selected processes (Phase 2). |
+| `TraceGuard.TaskCollector` | Per-trace process that receives the events of wrapped work; bounded and always terminating (Phase 2). |
 
 ## Event correlation
 
@@ -55,9 +57,15 @@ context. Consequences:
   cannot be read from outside its process. The test suites check this with
   40 interleaved concurrent requests (library) and 10 concurrent real
   database checkouts (demo).
-* **No cross-process attribution.** A query inside `Task.async/1` or a
-  `GenServer` finds no context and is dropped, never guessed. Each report
-  lists this in `limitations`. Explicit propagation is Phase 2 work.
+* **No implicit cross-process attribution.** A query inside a plain
+  `Task.async/1` or a `GenServer` finds no context and is dropped, never
+  guessed. Each report lists this in `limitations`.
+* **Explicit propagation (Phase 2).** `TraceGuard.wrap/1` gives a function a
+  token (trace ID, collector pid, shared `:atomics` budget). Whichever process
+  runs the function gets a temporary *task context* (`role: :task`) whose
+  events are sent to the trace's `TaskCollector`. The request process merges
+  them when it completes. The correlation is still structural, never
+  time-based. The full contract is in [task_propagation.md](task_propagation.md).
 * **Process reuse is handled.** Bandit reuses the connection process for
   keep-alive requests. Each `TraceGuard.Plug.call/2` replaces any stale
   context, and completing a trace deletes it. Tests run consecutive
@@ -176,25 +184,32 @@ Only the output of step 4 leaves the request process.
 | `request.headers` | object | Allow-listed headers only, redacted. |
 | `response.status` | integer \| null | |
 | `duration_us` | integer | From trace start to report build. |
-| `events[]` | array | `seq`, `name`, `type`, `offset_us`, `duration_us` (nullable), `outcome` (`"ok"`, `"error"` or null), `metadata` (object). |
+| `events[]` | array | `seq` (position in the merged timeline, 1..n), `process` (`"request"` or `"task-N"`), `name`, `type`, `offset_us`, `duration_us` (nullable), `outcome` (`"ok"`, `"error"` or null), `metadata` (object). |
 | `events_dropped` | integer | Events discarded after `:max_events`. |
-| `failure` | object \| null | `kind`, `exception` (module name or null for throw/exit), `message` (nullable), `plug_status`, `stacktrace[]` (`module`, `function` as `name/arity`, `file`, `line`, `application`), `captured_by`. |
+| `failure` | object \| null | `kind`, `exception` (module name; for an exit, the module of a crashed process's exception, otherwise null), `message` (nullable; for throw/exit a structural description, never the inspected value), `plug_status`, `stacktrace[]` (`module`, `function` as `name/arity`, `file`, `line`, `application`), `captured_by`. |
+| `tasks` | object \| null | Only when `wrap/1` was used: `status` (`complete`, `timeout`, `unavailable`, `collector_limit_reached`), `processes`, `events`. |
 | `redaction` | object | `applied`, `placeholder`, `sensitive_keys`, `redacted_values`, `scrubbed_message_values`. |
 | `limitations` | array of strings | What this report cannot show. |
 
-Event names in Phase 1: `request.start`, `request.stop`,
+Event names: `request.start`, `request.stop`,
 `phoenix.endpoint.start`, `phoenix.endpoint.stop`,
 `phoenix.router_dispatch.start`, `phoenix.router_dispatch.stop`,
-`phoenix.router_dispatch.exception`, `phoenix.error_rendered`, `ecto.query`.
+`phoenix.router_dispatch.exception`, `phoenix.error_rendered`, `ecto.query`,
+and from Phase 2 `task.start`, `task.stop`, `task.exception`.
 
 ## Resource bounds
 
-* Per request: at most `:max_events` ordinary events, plus a handful of
-  lifecycle events. State is held only for the life of the request.
+* Per request: at most `:max_events` ordinary events (request and task
+  events together), plus a handful of lifecycle events. State is held only
+  for the life of the request.
+* Task propagation: at most `:max_task_collectors` collectors, each bounded
+  to `:max_events` events and terminated at request completion, owner exit,
+  or `:task_collector_lifetime`.
 * Globally: at most `:max_reports` reports in one GenServer. There are no
   ETS tables.
 * Handlers do no I/O and make no blocking calls. A report is written with a
-  `GenServer.cast/2`.
-* Overhead has not been benchmarked yet (planned for Phase 2). Per observed
-  event, the cost is a process dictionary read and write plus one small map.
-  On success, the trace is discarded without building a report.
+  `GenServer.cast/2`. The only wait is draining task events for a failed
+  request, bounded by `:task_drain_timeout`.
+* Measured overhead and the proposed budget are in
+  [performance.md](performance.md). The full bounds review is in
+  [phase2_review.md](phase2_review.md).

@@ -14,6 +14,8 @@ defmodule TraceGuardDemo.Application do
        repos: Application.fetch_env!(:trace_guard_demo, :ecto_repos), skip: skip_migrations?()},
       {DNSCluster, query: Application.get_env(:trace_guard_demo, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: TraceGuardDemo.PubSub},
+      # Unlinked tasks for work whose failure must not kill the request process.
+      {Task.Supervisor, name: TraceGuardDemo.TaskSupervisor},
       # Start a worker by calling: TraceGuardDemo.Worker.start_link(arg)
       # {TraceGuardDemo.Worker, arg},
       # Start to serve requests, typically the last entry

@@ -10,8 +10,12 @@ defmodule TraceGuardDemoWeb.Router do
 
     get "/health", HealthController, :show
     get "/products", ProductController, :index
+    get "/catalog", ProductController, :catalog
+    get "/catalog/parallel", ProductController, :catalog_parallel
+    get "/inventory/audit", InventoryController, :audit
     post "/checkout", CheckoutController, :create
     post "/inventory/sync", InventoryController, :sync
+    post "/inventory/reconcile", InventoryController, :reconcile
   end
 
   # Diagnostic reports are for developers only; never expose them in production.

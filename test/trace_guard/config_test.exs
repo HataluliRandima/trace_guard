@@ -15,6 +15,9 @@ defmodule TraceGuard.ConfigTest do
     assert config.max_events == 100
     assert config.max_reports == 50
     assert config.redact_keys == Config.default_redact_keys()
+    assert config.max_task_collectors == 1_000
+    assert config.task_drain_timeout == 100
+    assert config.task_collector_lifetime == 300_000
   end
 
   test "custom redact keys extend, and never replace, the defaults" do
@@ -32,6 +35,9 @@ defmodule TraceGuard.ConfigTest do
           [response_header: "bad header"],
           [ecto_telemetry_prefixes: [:my_app]],
           [capture_sql: "yes"],
+          [max_task_collectors: 0],
+          [task_drain_timeout: -1],
+          [task_collector_lifetime: :infinity],
           [max_event: 10]
         ] do
       assert_raise ArgumentError, fn -> Config.validate!(opts) end

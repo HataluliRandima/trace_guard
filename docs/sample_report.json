@@ -1,12 +1,13 @@
 {
-    "duration_us": 54370,
+    "duration_us": 144384,
     "events": [
         {
             "duration_us": null,
             "metadata": {},
             "name": "request.start",
-            "offset_us": 21,
+            "offset_us": 25,
             "outcome": null,
+            "process": "request",
             "seq": 1,
             "type": "request"
         },
@@ -14,8 +15,9 @@
             "duration_us": null,
             "metadata": {},
             "name": "phoenix.endpoint.start",
-            "offset_us": 56,
+            "offset_us": 51,
             "outcome": null,
+            "process": "request",
             "seq": 2,
             "type": "endpoint"
         },
@@ -30,103 +32,109 @@
                 "route": "/api/checkout"
             },
             "name": "phoenix.router_dispatch.start",
-            "offset_us": 5443,
+            "offset_us": 10684,
             "outcome": null,
+            "process": "request",
             "seq": 3,
             "type": "router"
         },
         {
-            "duration_us": 623,
+            "duration_us": 218,
             "metadata": {
                 "decode_time_us": null,
                 "num_rows": 0,
                 "origin": "TraceGuardDemoWeb.CheckoutController.create/2 (lib/trace_guard_demo_web/controllers/checkout_controller.ex:7)",
-                "query_time_us": 514,
-                "queue_time_us": 109,
+                "query_time_us": 77,
+                "queue_time_us": 141,
                 "repo": "TraceGuardDemo.Repo",
                 "source": null,
                 "sql": "begin"
             },
             "name": "ecto.query",
-            "offset_us": 8219,
+            "offset_us": 26715,
             "outcome": "ok",
+            "process": "request",
             "seq": 4,
             "type": "db"
         },
         {
-            "duration_us": 263,
+            "duration_us": 633,
             "metadata": {
-                "decode_time_us": 0,
+                "decode_time_us": 3,
                 "num_rows": 1,
-                "origin": "TraceGuardDemo.Shop.-checkout/1-fun-0-/3 (lib/trace_guard_demo/shop.ex:23)",
-                "query_time_us": 262,
+                "origin": "TraceGuardDemo.Shop.-checkout/1-fun-0-/3 (lib/trace_guard_demo/shop.ex:117)",
+                "query_time_us": 630,
                 "queue_time_us": null,
                 "repo": "TraceGuardDemo.Repo",
                 "source": "products",
                 "sql": "SELECT p0.\"id\", p0.\"sku\", p0.\"name\", p0.\"price_cents\", p0.\"stock\", p0.\"inserted_at\", p0.\"updated_at\" FROM \"products\" AS p0 WHERE (p0.\"sku\" = ?)"
             },
             "name": "ecto.query",
-            "offset_us": 11578,
+            "offset_us": 40727,
             "outcome": "ok",
+            "process": "request",
             "seq": 5,
             "type": "db"
         },
         {
-            "duration_us": 227,
+            "duration_us": 298,
             "metadata": {
-                "decode_time_us": 0,
+                "decode_time_us": 2,
                 "num_rows": 1,
-                "origin": "TraceGuardDemo.Shop.-checkout/1-fun-0-/3 (lib/trace_guard_demo/shop.ex:26)",
-                "query_time_us": 226,
+                "origin": "TraceGuardDemo.Shop.-checkout/1-fun-0-/3 (lib/trace_guard_demo/shop.ex:120)",
+                "query_time_us": 296,
                 "queue_time_us": null,
                 "repo": "TraceGuardDemo.Repo",
                 "source": "products",
                 "sql": "UPDATE \"products\" AS p0 SET \"stock\" = \"stock\" + ? WHERE ((p0.\"id\" = ?) AND (p0.\"stock\" >= ?))"
             },
             "name": "ecto.query",
-            "offset_us": 15261,
+            "offset_us": 48191,
             "outcome": "ok",
+            "process": "request",
             "seq": 6,
             "type": "db"
         },
         {
-            "duration_us": 710,
+            "duration_us": 2144,
             "metadata": {
-                "decode_time_us": 0,
+                "decode_time_us": 3,
                 "num_rows": 1,
-                "origin": "TraceGuardDemo.Shop.-checkout/1-fun-0-/3 (lib/trace_guard_demo/shop.ex:32)",
-                "query_time_us": 709,
+                "origin": "TraceGuardDemo.Shop.-checkout/1-fun-0-/3 (lib/trace_guard_demo/shop.ex:126)",
+                "query_time_us": 2140,
                 "queue_time_us": null,
                 "repo": "TraceGuardDemo.Repo",
                 "source": "orders",
                 "sql": "INSERT INTO \"orders\" (\"status\",\"product_id\",\"quantity\",\"total_cents\",\"inserted_at\",\"updated_at\") VALUES (?1,?2,?3,?4,?5,?6) RETURNING \"id\""
             },
             "name": "ecto.query",
-            "offset_us": 35528,
+            "offset_us": 99276,
             "outcome": "ok",
+            "process": "request",
             "seq": 7,
             "type": "db"
         },
         {
-            "duration_us": 248,
+            "duration_us": 312,
             "metadata": {
                 "decode_time_us": null,
                 "num_rows": 0,
                 "origin": "TraceGuardDemoWeb.CheckoutController.create/2 (lib/trace_guard_demo_web/controllers/checkout_controller.ex:7)",
-                "query_time_us": 248,
+                "query_time_us": 312,
                 "queue_time_us": null,
                 "repo": "TraceGuardDemo.Repo",
                 "source": null,
                 "sql": "rollback"
             },
             "name": "ecto.query",
-            "offset_us": 40358,
+            "offset_us": 107705,
             "outcome": "ok",
+            "process": "request",
             "seq": 8,
             "type": "db"
         },
         {
-            "duration_us": 37066,
+            "duration_us": 106956,
             "metadata": {
                 "action": "create",
                 "exception": "TraceGuardDemo.Payments.GatewayError",
@@ -138,19 +146,21 @@
                 "route": "/api/checkout"
             },
             "name": "phoenix.router_dispatch.exception",
-            "offset_us": 48684,
+            "offset_us": 127893,
             "outcome": "error",
+            "process": "request",
             "seq": 9,
             "type": "exception"
         },
         {
-            "duration_us": 54257,
+            "duration_us": 144199,
             "metadata": {
                 "status": 500
             },
             "name": "phoenix.endpoint.stop",
-            "offset_us": 54310,
+            "offset_us": 144260,
             "outcome": null,
+            "process": "request",
             "seq": 10,
             "type": "endpoint"
         },
@@ -160,8 +170,9 @@
                 "status": 500
             },
             "name": "request.stop",
-            "offset_us": 54367,
+            "offset_us": 144378,
             "outcome": "error",
+            "process": "request",
             "seq": 11,
             "type": "request"
         }
@@ -316,9 +327,9 @@
             }
         ]
     },
-    "generated_at": "2026-10-09T20:27:56.269660Z",
+    "generated_at": "2026-10-09T21:49:30.781390Z",
     "limitations": [
-        "Only telemetry events emitted by the request-handling process are included; work performed in other processes (Task, GenServer, etc.) is not correlated.",
+        "Only telemetry events emitted by the request-handling process, or by functions wrapped with TraceGuard.wrap/1, are included; work in other processes (plain Task, GenServer, etc.) is not correlated.",
         "Individual function calls are not traced; the timeline contains only the Phoenix and Ecto telemetry events listed in the report.",
         "Request bodies, query strings, cookies and SQL parameter values are never captured."
     ],
@@ -353,13 +364,14 @@
         "incoming_id": null,
         "method": "POST",
         "path": null,
-        "request_id": "GNz2Z4JTub7-qaMAAAlB",
+        "request_id": "GNz62xSYAyF9kIIAAACF",
         "route": "/api/checkout",
-        "started_at": "2026-10-09T20:27:56.215285Z"
+        "started_at": "2026-10-09T21:49:30.636990Z"
     },
     "response": {
         "status": 500
     },
     "schema": "traceguard.report/v1",
-    "trace_id": "7c9c36dba4c0860f2735f0fb71cf6289"
+    "tasks": null,
+    "trace_id": "9a172de8c3a49cac179676daf5950dca"
 }

@@ -25,8 +25,9 @@ defmodule TraceGuard.TraceBuilder do
   @max_list 100
 
   @base_limitations [
-    "Only telemetry events emitted by the request-handling process are included; " <>
-      "work performed in other processes (Task, GenServer, etc.) is not correlated.",
+    "Only telemetry events emitted by the request-handling process, or by functions " <>
+      "wrapped with TraceGuard.wrap/1, are included; work in other processes " <>
+      "(plain Task, GenServer, etc.) is not correlated.",
     "Individual function calls are not traced; the timeline contains only the Phoenix " <>
       "and Ecto telemetry events listed in the report.",
     "Request bodies, query strings, cookies and SQL parameter values are never captured."
@@ -46,34 +47,76 @@ defmodule TraceGuard.TraceBuilder do
 
   def failure(kind, reason, stacktrace, source, config) do
     normalized = if kind == :error, do: Exception.normalize(:error, reason, stacktrace)
+    {exception, message} = describe(kind, normalized || reason)
 
     %{
       kind: Atom.to_string(kind),
-      exception: exception_name(normalized),
-      message: if(config.capture_exception_message, do: message(kind, normalized, reason)),
+      exception: exception,
+      message: if(config.capture_exception_message, do: message),
       plug_status: if(normalized, do: Plug.Exception.status(normalized)),
       stacktrace: frames(stacktrace, config.max_stacktrace_frames),
       captured_by: source
     }
   end
 
-  defp exception_name(%{__exception__: true} = exception), do: inspect(exception.__struct__)
-  defp exception_name(_), do: nil
+  # Returns {exception module name | nil, message}. Arbitrary terms (thrown
+  # values, exit reasons, exception structs) are never inspected: they can
+  # hold any application data. Only exception messages are kept, and they are
+  # scrubbed later like every other message.
+  defp describe(:error, %{__exception__: true} = exception),
+    do: {exception_name(exception), exception_message(exception)}
+
+  defp describe(:exit, reason), do: describe_exit(reason)
+
+  defp describe(:throw, value),
+    do: {nil, "throw of a #{type_of(value)} value (value not captured)"}
+
+  # e.g. Task.await/2 exits with {reason, {Task, :await, [task, timeout]}}.
+  defp describe_exit({reason, {module, function, args}})
+       when is_atom(module) and is_atom(function) and is_list(args) do
+    {exception, message} = describe_exit(reason)
+    {exception, "#{module_name(module)}.#{function}/#{length(args)} exited: #{message}"}
+  end
+
+  # A crashed process: {exception, stacktrace}.
+  defp describe_exit({%{__exception__: true} = exception, stacktrace}) when is_list(stacktrace),
+    do: {exception_name(exception), "process crashed: " <> exception_message(exception)}
+
+  defp describe_exit(reason) when is_atom(reason), do: {nil, "exit: #{inspect(reason)}"}
+
+  defp describe_exit({:shutdown, _}), do: {nil, "exit: {:shutdown, _} (details not captured)"}
+
+  defp describe_exit(reason),
+    do: {nil, "exit with a #{type_of(reason)} reason (reason not captured)"}
+
+  defp type_of(value) when is_map(value) and is_map_key(value, :__struct__), do: "struct"
+  defp type_of(value) when is_map(value), do: "map"
+  defp type_of(value) when is_tuple(value), do: "#{tuple_size(value)}-tuple"
+  defp type_of(value) when is_list(value), do: "list"
+  defp type_of(value) when is_binary(value), do: "string"
+  defp type_of(value) when is_atom(value), do: "atom"
+  defp type_of(value) when is_number(value), do: "number"
+  defp type_of(_value), do: "term"
+
+  defp exception_name(%module{}), do: module_name(module)
+
+  defp module_name(module) do
+    case Atom.to_string(module) do
+      "Elixir." <> name -> name
+      _ -> inspect(module)
+    end
+  end
 
   # Calls message/1 directly instead of Exception.message/1: when message/1
   # raises, the latter falls back to a string containing the inspected
   # exception struct, which may hold arbitrary data.
-  defp message(:error, %module{__exception__: true} = exception, _reason) do
+  defp exception_message(%module{} = exception) do
     case module.message(exception) do
       message when is_binary(message) -> message
       _ -> "(message unavailable: message/1 did not return a string)"
     end
   rescue
     _ -> "(message unavailable: message/1 raised)"
-  end
-
-  defp message(kind, _normalized, reason) do
-    "#{kind}: " <> inspect(reason, limit: 10, printable_limit: 200)
   end
 
   # Stacktrace entries may carry the actual call arguments instead of an
@@ -106,11 +149,33 @@ defmodule TraceGuard.TraceBuilder do
 
   defp frames(_, _), do: []
 
+  # :application.get_application/1 scans the application controller's table
+  # on every call (~20 µs per frame when profiled). A module -> application
+  # index is built once, on the first failure, from the applications loaded
+  # at that moment. Modules of applications loaded later map to nil.
   defp application_of(mod) do
-    case :application.get_application(mod) do
-      {:ok, app} -> Atom.to_string(app)
-      :undefined -> nil
+    index =
+      case :persistent_term.get({__MODULE__, :application_index}, nil) do
+        nil -> build_application_index()
+        index -> index
+      end
+
+    case index do
+      %{^mod => app} -> Atom.to_string(app)
+      _ -> nil
     end
+  end
+
+  defp build_application_index do
+    index =
+      for {app, _description, _vsn} <- :application.loaded_applications(),
+          {:ok, modules} <- [:application.get_key(app, :modules)],
+          module <- modules,
+          into: %{},
+          do: {module, app}
+
+    :persistent_term.put({__MODULE__, :application_index}, index)
+    index
   end
 
   @doc """
@@ -122,10 +187,14 @@ defmodule TraceGuard.TraceBuilder do
   def build(%Context{} = ctx, status, %Config{} = config) do
     finished_mono = System.monotonic_time()
 
+    # Events from different processes are ordered by monotonic time (one
+    # clock per node); ties keep request events first, then per-process
+    # order. `seq` is then renumbered as the position in the timeline.
     events =
       ctx.events
-      |> Enum.sort_by(&{&1.at, &1.seq})
-      |> Enum.map(&event_to_map(&1, ctx.started_mono))
+      |> Enum.sort_by(&{&1.at, process_rank(&1), &1.seq})
+      |> Enum.with_index(1)
+      |> Enum.map(fn {event, seq} -> event_to_map(%{event | seq: seq}, ctx.started_mono) end)
 
     report = %{
       schema: @schema,
@@ -138,6 +207,7 @@ defmodule TraceGuard.TraceBuilder do
       events: events,
       events_dropped: ctx.dropped,
       failure: ctx.failure,
+      tasks: task_summary(ctx.tasks),
       limitations: limitations(ctx, status, config)
     }
 
@@ -153,9 +223,16 @@ defmodule TraceGuard.TraceBuilder do
 
   defp outcome(nil, _status, _config), do: "ok"
 
+  defp process_rank(%{process: "request"}), do: 0
+  defp process_rank(_event), do: 1
+
+  defp task_summary(%{status: _} = summary), do: summary
+  defp task_summary(_no_propagation), do: nil
+
   defp event_to_map(event, started_mono) do
     %{
       seq: event.seq,
+      process: Map.get(event, :process, "request"),
       name: event.name,
       type: event.type,
       offset_us: to_us(event.at - started_mono),
@@ -182,11 +259,32 @@ defmodule TraceGuard.TraceBuilder do
         "The exception was raised outside the router (or no router dispatch was observed), " <>
           "so route information and events after the failure point may be missing.",
       not config.capture_exception_message &&
-        "The exception message is omitted (capture_exception_message: false)."
+        "The exception message is omitted (capture_exception_message: false).",
+      task_limitation(ctx.tasks, config)
     ]
 
     @base_limitations ++ Enum.filter(dynamic, &is_binary/1)
   end
+
+  defp task_limitation(%{status: "complete"}, _config),
+    do:
+      "Task events are included only if they reached TraceGuard before the request " <>
+        "completed; work still running at that point is not shown."
+
+  defp task_limitation(%{status: "timeout"}, config),
+    do:
+      "Task events could not be collected within task_drain_timeout " <>
+        "(#{config.task_drain_timeout} ms) and are missing."
+
+  defp task_limitation(%{status: "unavailable"}, _config),
+    do: "The task collector had already stopped; task events are missing."
+
+  defp task_limitation(%{status: "collector_limit_reached"}, config),
+    do:
+      "Task propagation was skipped because max_task_collectors " <>
+        "(#{config.max_task_collectors}) was reached; task events are missing."
+
+  defp task_limitation(_tasks, _config), do: nil
 
   ## Sanitization
 
@@ -232,6 +330,8 @@ defmodule TraceGuard.TraceBuilder do
   defp sanitize_string(value, max_len) do
     cond do
       not String.valid?(value) -> "(binary, #{byte_size(value)} bytes)"
+      # A string cannot have more graphemes than bytes: skip counting.
+      byte_size(value) <= max_len -> value
       String.length(value) > max_len -> String.slice(value, 0, max_len) <> "…(truncated)"
       true -> value
     end

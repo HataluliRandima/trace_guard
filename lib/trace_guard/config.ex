@@ -34,7 +34,10 @@ defmodule TraceGuard.Config do
     max_stacktrace_frames: 20,
     response_header: "x-traceguard-id",
     incoming_header: nil,
-    ecto_telemetry_prefixes: []
+    ecto_telemetry_prefixes: [],
+    max_task_collectors: 1_000,
+    task_drain_timeout: 100,
+    task_collector_lifetime: 300_000
   ]
 
   @key :"$trace_guard_config"
@@ -54,7 +57,10 @@ defmodule TraceGuard.Config do
           max_stacktrace_frames: non_neg_integer(),
           response_header: String.t() | nil,
           incoming_header: String.t() | nil,
-          ecto_telemetry_prefixes: [[atom()]]
+          ecto_telemetry_prefixes: [[atom()]],
+          max_task_collectors: pos_integer(),
+          task_drain_timeout: non_neg_integer(),
+          task_collector_lifetime: pos_integer()
         }
 
   defstruct Keyword.keys(@defaults)
@@ -135,7 +141,10 @@ defmodule TraceGuard.Config do
       max_stacktrace_frames: non_neg_integer!(merged, :max_stacktrace_frames),
       response_header: header_name!(merged, :response_header),
       incoming_header: header_name!(merged, :incoming_header),
-      ecto_telemetry_prefixes: prefixes!(merged)
+      ecto_telemetry_prefixes: prefixes!(merged),
+      max_task_collectors: pos_integer!(merged, :max_task_collectors),
+      task_drain_timeout: non_neg_integer!(merged, :task_drain_timeout),
+      task_collector_lifetime: pos_integer!(merged, :task_collector_lifetime)
     }
   end
 
