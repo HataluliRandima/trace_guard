@@ -84,6 +84,10 @@ defmodule TraceGuard.Storage do
     {adapter, opts} = adapter()
     count(:submitted)
 
+    # Marked pending *before* the adapter can store it, so a fast store
+    # cannot resolve the mark before it exists.
+    TraceGuard.DropLog.pending(trace_id, adapter)
+
     result =
       try do
         adapter.put(report, opts)
@@ -98,6 +102,7 @@ defmodule TraceGuard.Storage do
         result
 
       {:ok, :queued} ->
+        # Stays pending until the adapter calls stored/1 or dropped/2.
         count(:accepted)
         result
 
@@ -166,6 +171,7 @@ defmodule TraceGuard.Storage do
   @spec stored(report()) :: :ok
   def stored(%{"trace_id" => trace_id} = report) do
     count(:stored)
+    TraceGuard.DropLog.resolve(trace_id)
 
     :telemetry.execute([:trace_guard, :report, :stored], %{}, %{
       trace_id: trace_id,
@@ -181,6 +187,7 @@ defmodule TraceGuard.Storage do
   @spec dropped(String.t(), term()) :: :ok
   def dropped(trace_id, reason) do
     count(if reason == :overloaded, do: :dropped_overloaded, else: :dropped_other)
+    TraceGuard.DropLog.record_drop(trace_id, reason)
 
     :telemetry.execute([:trace_guard, :report, :dropped], %{}, %{
       trace_id: trace_id,
@@ -195,6 +202,19 @@ defmodule TraceGuard.Storage do
   """
   @spec lost(pos_integer()) :: :ok
   def lost(n) when is_integer(n) and n > 0, do: :counters.add(counters(), index(:lost), n)
+
+  @doc """
+  For a queueing adapter starting (or restarting): submissions still marked
+  pending for `adapter` died with its previous incarnation. Each is recorded
+  as a drop with reason `:lost` (so `TraceGuard.report_status/1` can say
+  so) and counted in `:lost`. Returns the number.
+  """
+  @spec lost_pending(module()) :: non_neg_integer()
+  def lost_pending(adapter) do
+    n = TraceGuard.DropLog.lost_pending(adapter)
+    if n > 0, do: lost(n)
+    n
+  end
 
   @doc """
   The summary of a report used by `list/0` and discovery filters. Built only

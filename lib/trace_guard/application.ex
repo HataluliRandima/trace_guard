@@ -9,8 +9,10 @@ defmodule TraceGuard.Application do
     config = TraceGuard.Config.load!()
     TraceGuard.Storage.init_counters()
 
+    # DropLog first: storage adapters consult it when they (re)start.
     children =
-      storage_children(config) ++
+      [TraceGuard.DropLog] ++
+        storage_children(config) ++
         [
           Supervisor.child_spec(
             {DynamicSupervisor,

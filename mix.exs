@@ -34,6 +34,8 @@ defmodule TraceGuard.MixProject do
       {:telemetry, "~> 1.0"},
       {:plug, "~> 1.14"},
       {:jason, "~> 1.4"},
+      # Optional: only for TraceGuard.Storage.SQLite (persistent reports).
+      {:exqlite, "~> 0.42", optional: true},
       # Only used to exercise the real Phoenix error-handling lifecycle in tests.
       {:phoenix, "~> 1.7", only: :test}
     ]

@@ -21,7 +21,10 @@ Phoenix 1.8.15, Plug 1.20.3, Ecto SQL 3.14.0 and Bandit 1.12.5.
 | `TraceGuard.ReportStore` | Default storage adapter: bounded in-memory GenServer with bounded admission (`max_reports`, `max_pending_reports`). |
 | `TraceGuard.Exporter.JSON` | Jason encoding and file export. |
 | `TraceGuard.Propagation` | `wrap/1`: opt-in propagation of a trace into selected processes (Phase 2). |
-| `TraceGuard.TaskCollector` | Per-trace process that receives the events of wrapped work; bounded and always terminating (Phase 2). |
+| `TraceGuard.TaskCollector` | Per-trace process that receives the events of wrapped work and traced GenServer calls; bounded and always terminating (Phase 2). |
+| `TraceGuard.Server` | `use TraceGuard.Server` plus `TraceGuard.call/3`: explicit propagation into selected `GenServer.call/3` operations (Phase 4). |
+| `TraceGuard.DropLog` | Bounded ETS record of recent drops and pending submissions, for `report_status/1` (Phase 4). |
+| `TraceGuard.Storage.SQLite` | Optional persistent storage adapter (Phase 4). |
 
 ## Event correlation
 
@@ -67,6 +70,10 @@ context. Consequences:
   events are sent to the trace's `TaskCollector`. The request process merges
   them when it completes. The correlation is still structural, never
   time-based. The full contract is in [task_propagation.md](task_propagation.md).
+* **Explicit GenServer propagation (Phase 4).** `TraceGuard.call/3` puts the
+  same token in the message, and `use TraceGuard.Server` runs the server's
+  `handle_call/3` under it for that one callback. See
+  [genserver_propagation.md](genserver_propagation.md).
 * **Process reuse is handled.** Bandit reuses the connection process for
   keep-alive requests. Each `TraceGuard.Plug.call/2` replaces any stale
   context, and completing a trace deletes it. Tests run consecutive
@@ -199,7 +206,9 @@ Event names: `request.start`, `request.stop`,
 `phoenix.endpoint.start`, `phoenix.endpoint.stop`,
 `phoenix.router_dispatch.start`, `phoenix.router_dispatch.stop`,
 `phoenix.router_dispatch.exception`, `phoenix.error_rendered`, `ecto.query`,
-and from Phase 2 `task.start`, `task.stop`, `task.exception`.
+from Phase 2 `task.start`, `task.stop`, `task.exception`, and from Phase 4
+`genserver.call.start`, `genserver.call.stop`, `genserver.call.exception`.
+`events[].process` is `"request"`, `"task-N"` or `"server-N"`.
 
 ## Resource bounds
 

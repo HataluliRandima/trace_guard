@@ -129,6 +129,24 @@ crash kills the request process before any error can be rendered or
 reported. See [task_propagation.md](task_propagation.md) for the full
 contract, limits and unsupported cases.
 
+## 6b. Optional: include work done in a GenServer
+
+For a long-lived server that does work on behalf of requests (pricing,
+caching, an API client), opt in on both sides:
+
+```elixir
+defmodule MyApp.Pricing do
+  use GenServer
+  use TraceGuard.Server          # after use GenServer
+  # handle_call/3 clauses unchanged
+end
+
+TraceGuard.call(MyApp.Pricing, {:quote, sku, qty})   # instead of GenServer.call/3
+```
+
+Only that call's `handle_call/3` is traced; the server's background work
+never is. See [genserver_propagation.md](genserver_propagation.md).
+
 ## 7. Finding a report when the response has no trace header
 
 Throws, exits (including `Task.await/2` on a crashed task) and exceptions in
@@ -147,6 +165,32 @@ TraceGuard.list_reports(request_id: "F5zX...")         # from the crash log line
 With `metadata: [:request_id, :trace_guard_id]` in your logger format,
 Bandit's crash log line also carries the trace ID. All the options are in
 [storage.md](storage.md#finding-a-report-without-a-response-header).
+
+## 7b. Was my report kept?
+
+```elixir
+TraceGuard.report_status(trace_id)
+#=> :stored | {:dropped, :overloaded} | {:dropped, :lost} | :pending | :unknown
+```
+
+`:unknown` means TraceGuard has no record, for example because it expired
+after `:drop_record_ttl`. It never means "not dropped". See
+[storage.md](storage.md#drop-records-phase-4).
+
+## 7c. Optional: keep reports across restarts in development
+
+```elixir
+# mix.exs
+{:exqlite, "~> 0.42"}
+
+# config/dev.exs
+config :trace_guard,
+  storage: {TraceGuard.Storage.SQLite, database: "priv/trace_guard_reports.db"}
+```
+
+No migration is needed: the adapter creates its table. Writes happen in a
+background writer behind the same bounded queue as the in-memory store. See
+[storage.md](storage.md#the-sqlite-adapter-persistent-phase-4).
 
 ## 8. Optional: expose reports in development
 

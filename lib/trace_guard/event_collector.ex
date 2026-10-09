@@ -65,7 +65,12 @@ defmodule TraceGuard.EventCollector do
       metadata: metadata
     }
 
-    Propagation.send_event(ctx.tasks, event, Config.get().max_events)
+    Propagation.send_event(
+      ctx.tasks,
+      ctx.request[:kind] || "task",
+      event,
+      Config.get().max_events
+    )
   end
 
   defp record_in(ctx, name, type, metadata, opts) do

@@ -15,7 +15,8 @@ defmodule TraceGuard.TaskCollector do
 
   It stores at most `:max_events` events (senders are also budgeted through
   the shared `:atomics` counter) and labels them by sending process in
-  order of first appearance: `"task-1"`, `"task-2"`, ...
+  order of first appearance, per kind: `"task-1"`, `"task-2"`,
+  `"server-1"`, ...
   """
 
   use GenServer, restart: :temporary
@@ -59,9 +60,9 @@ defmodule TraceGuard.TaskCollector do
   end
 
   @impl true
-  def handle_info({:trace_guard_event, trace_id, pid, event}, %{trace_id: trace_id} = state) do
+  def handle_info({:trace_guard_event, trace_id, pid, kind, event}, %{trace_id: trace_id} = state) do
     if state.count < state.max_events do
-      {label, labels} = label(state.labels, pid)
+      {label, labels} = label(state.labels, pid, kind)
       event = Map.put(event, :process, label)
 
       {:noreply,
@@ -83,14 +84,17 @@ defmodule TraceGuard.TaskCollector do
     {:stop, :normal, {Enum.reverse(state.events), state.dropped}, state}
   end
 
-  defp label(labels, pid) do
+  # One label per {process, kind}: "task-1", "task-2", "server-1", ...
+  # numbered per kind in order of first appearance.
+  defp label(labels, pid, kind) do
     case labels do
-      %{^pid => label} ->
+      %{{^pid, ^kind} => label} ->
         {label, labels}
 
       _ ->
-        label = "task-#{map_size(labels) + 1}"
-        {label, Map.put(labels, pid, label)}
+        n = Enum.count(labels, fn {{_pid, k}, _label} -> k == kind end) + 1
+        label = "#{kind}-#{n}"
+        {label, Map.put(labels, {pid, kind}, label)}
     end
   end
 end

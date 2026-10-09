@@ -47,7 +47,7 @@ defmodule TraceGuard do
       }
   """
 
-  alias TraceGuard.{Context, Exporter, Storage}
+  alias TraceGuard.{Context, DropLog, Exporter, Storage}
 
   @type report :: %{optional(String.t()) => term()}
 
@@ -89,13 +89,13 @@ defmodule TraceGuard do
   if the storage adapter cannot answer.
   """
   @spec get_report(String.t()) ::
-          {:ok, report()} | {:error, :invalid_trace_id | :not_found | :unavailable}
+          {:ok, report()} | {:error, :invalid_trace_id | :not_found | :unavailable | :corrupt}
   def get_report(trace_id) do
     if Context.valid_trace_id?(trace_id) do
       case Storage.get(trace_id) do
         {:ok, report} -> {:ok, report}
         :error -> {:error, :not_found}
-        {:error, :unavailable} -> {:error, :unavailable}
+        {:error, reason} when reason in [:unavailable, :corrupt] -> {:error, reason}
       end
     else
       {:error, :invalid_trace_id}
@@ -110,10 +110,11 @@ defmodule TraceGuard do
   store, so a report retained at any point is never missed:
 
     * `{:ok, report}` once it is retained;
-    * `{:error, {:dropped, reason}}` if it is refused or lost *while waiting*
-      (for example `:overloaded`);
-    * `{:error, :timeout}` if neither happens within `timeout` ms. That
-      includes a report that was dropped or evicted before the call.
+    * `{:error, {:dropped, reason}}` if it was refused or lost, either
+      while waiting or **before the call** when its drop record is still
+      retained (see `report_status/1`);
+    * `{:error, :timeout}` if none of this is observed within `timeout` ms,
+      for example a report that was evicted, or whose drop record expired.
   """
   @spec await_report(String.t(), timeout()) ::
           {:ok, report()}
@@ -142,12 +143,7 @@ defmodule TraceGuard do
             {:ok, report}
 
           _not_yet ->
-            receive do
-              {^ref, :stored} -> fetch_after_stored(trace_id, remaining.())
-              {^ref, {:dropped, reason}} -> {:error, {:dropped, reason}}
-            after
-              remaining.() -> {:error, :timeout}
-            end
+            await_outcome(trace_id, ref, remaining)
         end
       after
         :telemetry.detach(handler_id)
@@ -157,6 +153,72 @@ defmodule TraceGuard do
       {:error, :invalid_trace_id}
     end
   end
+
+  # Subscribed already: a drop recorded before this point is in the drop
+  # log; one recorded after it arrives as an event.
+  defp await_outcome(trace_id, ref, remaining) do
+    case DropLog.lookup(trace_id) do
+      {:dropped, reason} ->
+        {:error, {:dropped, reason}}
+
+      :none ->
+        receive do
+          {^ref, :stored} -> fetch_after_stored(trace_id, remaining.())
+          {^ref, {:dropped, reason}} -> {:error, {:dropped, reason}}
+        after
+          remaining.() -> {:error, :timeout}
+        end
+    end
+  end
+
+  @doc """
+  What TraceGuard knows about the report of `trace_id`:
+
+    * `:stored`: the storage adapter has it now;
+    * `{:dropped, reason}`: a retained drop record says it was not kept
+      (`:overloaded`, `:unavailable`, `:lost` in a store restart,
+      `{:adapter_failed, kind}`, ...);
+    * `:pending`: accepted by a queueing adapter, outcome not yet observed;
+    * `:unknown`: none of the above. The trace may not have failed, may
+      not have finished, or its report may have been evicted, or its drop
+      record expired (`:drop_record_ttl`) or been evicted
+      (`:max_drop_records`). `:unknown` is never evidence that a report
+      was or was not dropped;
+    * `{:error, :invalid_trace_id}`, or `{:error, :unavailable}` /
+      `{:error, :corrupt}` when the store cannot answer and nothing else is
+      known.
+
+  Nothing is inferred from timing or from a report's absence: `:dropped`
+  is only returned from an explicit record.
+  """
+  @spec report_status(String.t()) ::
+          :stored
+          | {:dropped, term()}
+          | :pending
+          | :unknown
+          | {:error, :invalid_trace_id | :unavailable | :corrupt}
+  def report_status(trace_id) do
+    if Context.valid_trace_id?(trace_id) do
+      stored = Storage.get(trace_id, timeout: 1_000)
+
+      cond do
+        match?({:ok, _}, stored) -> :stored
+        (drop = DropLog.lookup(trace_id)) != :none -> drop
+        DropLog.pending?(trace_id) -> :pending
+        match?({:error, _}, stored) -> stored
+        true -> :unknown
+      end
+    else
+      {:error, :invalid_trace_id}
+    end
+  end
+
+  @doc """
+  Like `GenServer.call/3`, carrying the caller's trace into a server that
+  uses `TraceGuard.Server`. See `TraceGuard.Server` for the contract.
+  """
+  @spec call(GenServer.server(), term(), timeout()) :: term()
+  defdelegate call(server, request, timeout \\ 5000), to: TraceGuard.Server
 
   defp fetch_after_stored(trace_id, timeout) do
     case Storage.get(trace_id, timeout: max(timeout, 1)) do

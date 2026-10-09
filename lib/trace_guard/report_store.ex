@@ -30,8 +30,9 @@ defmodule TraceGuard.ReportStore do
   ## Restarts
 
   The store is supervised. A restart loses the retained reports and any
-  admitted submissions still queued; the number of those lost submissions is
-  added to the `:lost` statistic (their trace IDs are unknown). The new
+  admitted submissions still queued. Those submissions are recorded as drops
+  with reason `:lost` (by trace ID, see `TraceGuard.DropLog`) and counted in
+  the `:lost` statistic. The new
   incarnation starts with an empty queue and a fresh admission counter.
   Nothing is written to disk or sent over the network.
   """
@@ -102,14 +103,10 @@ defmodule TraceGuard.ReportStore do
 
   @impl GenServer
   def init(_opts) do
-    # Submissions admitted by a previous incarnation died with its mailbox.
-    lost =
-      case :persistent_term.get(@admission, nil) do
-        {_old_pid, old_pending} -> :atomics.get(old_pending, 1)
-        nil -> 0
-      end
-
-    if lost > 0, do: Storage.lost(lost)
+    # Submissions admitted by a previous incarnation died with its mailbox;
+    # they are still marked pending in TraceGuard.DropLog and become
+    # per-trace `:lost` drops.
+    Storage.lost_pending(__MODULE__)
 
     pending = :atomics.new(1, [])
     :persistent_term.put(@admission, {self(), pending})

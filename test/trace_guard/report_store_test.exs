@@ -95,7 +95,10 @@ defmodule TraceGuard.ReportStoreTest do
 
     assert_receive {:report_event, {:dropped, :overloaded}, ^id}
     :sys.resume(store_pid())
-    assert TraceGuard.await_report(id, 100) == {:error, :timeout}
+    # Phase 4: the retained drop record answers immediately, even though the
+    # drop happened before the call (Phase 3 timed out here).
+    assert TraceGuard.await_report(id, 100) == {:error, {:dropped, :overloaded}}
+    assert TraceGuard.report_status(id) == {:dropped, :overloaded}
     assert TraceGuard.get_report(id) == {:error, :not_found}
     :telemetry.detach(handler)
   end

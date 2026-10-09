@@ -48,8 +48,9 @@ Outside a traced request (or when TraceGuard is disabled), `wrap/1` returns
 "tasks": {"status": "complete", "processes": 2, "events": 6}
 ```
 
-* Every event has a `process` field: `"request"`, or `"task-N"`, numbered in
-  order of each task process's first event.
+* Every event has a `process` field: `"request"`, `"task-N"`, or (for
+  traced GenServer calls, Phase 4) `"server-N"`, numbered per kind in order of
+  each process's first event.
 * Each wrapped call adds `task.start`, then `task.stop` (with duration,
   outcome `"ok"`) or `task.exception` (with `kind` and exception module only).
 * Events from all processes are merged into one timeline, ordered by
@@ -117,8 +118,10 @@ it would not hold, and propagation is single-node anyway.
 These are not propagated in Phase 2. Their events are not attributed to any
 request:
 
-* Processes you don't explicitly wrap: `GenServer.call/2` handlers, `spawn`,
-  `Task` without `wrap/1`, and library-internal processes.
+* Processes you don't explicitly wrap: `spawn`, `Task` without `wrap/1`, and
+  library-internal processes. GenServers are covered only for calls made with
+  `TraceGuard.call/3` to a server that uses `TraceGuard.Server` (Phase 4,
+  see [genserver_propagation.md](genserver_propagation.md)).
 * Work that outlives the request, such as background jobs or `Task.start`
   that runs after the response. Its events are dropped (see above).
 * Other nodes. The token holds a local pid and an `:atomics` reference, which

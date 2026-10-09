@@ -4,10 +4,12 @@
 > timeline, correlates available telemetry events, safely redacts sensitive
 > information, and produces a useful diagnostic report.
 
-**Status: Phase 3 (v0.1.0, unreleased).** It works end to end against
-Phoenix 1.8 / Plug 1.20 / Ecto SQL 3.14, and its overhead has been measured
-(see [docs/performance.md](docs/performance.md)), but it is not yet
-production-hardened. See [Limitations](#limitations).
+**Status: Phase 4 (v0.1.0, unreleased).** It works end to end, its overhead
+has been measured ([docs/performance.md](docs/performance.md)), and its test
+suite passes on four verified combinations, from Elixir 1.15.8 / OTP 26 with
+Phoenix 1.7.24 to Elixir 1.20.1 / OTP 29 with Phoenix 1.8.15 (others are
+untested, see [docs/compatibility.md](docs/compatibility.md)). It is not
+production-hardened: see [Limitations](#limitations).
 
 ## The problem
 
@@ -40,11 +42,16 @@ business logic: you add one plug and one config line.
 | `TraceGuard.Storage` behaviour (in-memory default, test adapter, contract suite) and JSON export (Phase 3) | ✅ |
 | Finding reports whose response has no trace header: correlation ID, request ID and route filters, plus `await_report/2` (Phase 3) | ✅ |
 | Validated incoming correlation ID (opt-in) | ✅ |
-| Phoenix demo app with real SQLite queries and a deliberate failure | ✅ |
+| Explicit trace propagation into selected `GenServer.call/3` operations: `TraceGuard.call/3` and `use TraceGuard.Server` (Phase 4) | ✅ opt-in |
+| Persistent SQLite storage adapter for local development and testing, behind the same bounded queue (Phase 4) | ✅ optional `exqlite` |
+| `report_status/1`: stored / dropped (with reason, including `:lost`) / pending / unknown, from a bounded drop record (Phase 4) | ✅ |
+| Compatibility matrix script and verified version combinations (Phase 4) | ✅ |
+| Phoenix demo app with real SQLite queries and deliberate failures | ✅ |
 
 Not implemented: cloud service, dashboard, distributed tracing, implicit
-or cross-node propagation, LiveView/Oban, log capture, automatic function
-tracing, AI analysis. See [Roadmap](#roadmap).
+or cross-node propagation, automatic GenServer tracing, LiveView/Oban, log
+capture, automatic function tracing, AI analysis, a production database
+adapter. See [Roadmap](#roadmap).
 
 ## Example
 
@@ -129,15 +136,20 @@ TraceGuard.list_reports()                       # newest first
 {:ok, json} = TraceGuard.export_json(trace_id, pretty: true)
 ```
 
-Work moved into a `Task` is invisible unless you opt it in:
+Work moved into a `Task` or a GenServer is invisible unless you opt it in:
 
 ```elixir
 Task.async(TraceGuard.wrap(fn -> Repo.all(Product) end))
+
+# in the GenServer module: use TraceGuard.Server
+TraceGuard.call(MyApp.Pricing, {:quote, sku, qty})
 ```
 
 See [docs/getting_started.md](docs/getting_started.md) for the full guide,
-[docs/task_propagation.md](docs/task_propagation.md) for the propagation
-contract and [docs/configuration.md](docs/configuration.md) for every option.
+[docs/task_propagation.md](docs/task_propagation.md) and
+[docs/genserver_propagation.md](docs/genserver_propagation.md) for the
+propagation contracts, and [docs/configuration.md](docs/configuration.md)
+for every option.
 
 ## Running the demo
 
@@ -166,6 +178,7 @@ test values appear in them. Details are in [demo/README.md](demo/README.md).
 cd demo
 MIX_ENV=bench mix bench.requests                       # enabled vs disabled, paired alternating rounds
 MIX_ENV=bench mix run --no-start bench/event_cost.exs  # allocation per event
+MIX_ENV=bench mix run --no-start bench/phase4_costs.exs # propagation, storage, outage
 ```
 
 Method, results and the proposed overhead budget are in
@@ -180,14 +193,19 @@ laptop:
 * Handing a report to the store adds no measurable request-side cost.
   Retaining it costs the store about 8–14 µs. At the defaults, the store
   holds at most about 1.5 MB (typical reports) to 12 MB (near-worst case).
+* A traced GenServer call costs about 5 µs. The first propagation in a
+  request costs about 100 µs (starting the trace's collector).
+* The SQLite adapter commits a report in about 0.4 ms in its background
+  writer. Its queue stayed at the limit (50) during a locked-database outage.
 * The benchmark reports machine drift next to every delta. Latency on this
   laptop is noisy; memory figures repeat exactly.
 
 ## Running the tests
 
 ```bash
-mix test                      # library: 105 tests + 1 doctest (unit, real Phoenix endpoint, real Task processes, storage contract)
-(cd demo && mix test)         # demo: 13 tests, end-to-end with real Ecto/SQLite and real Bandit HTTP
+mix test                      # library: 142 tests + 1 doctest (real Phoenix endpoint, Task and GenServer processes, 3 storage adapters)
+(cd demo && mix test)         # demo: 16 tests, end-to-end with real Ecto/SQLite and real Bandit HTTP
+scripts/compat_matrix.sh      # library suite on several Elixir/OTP/dependency combinations
 mix format --check-formatted
 mix compile --warnings-as-errors
 ```
@@ -198,21 +216,27 @@ mix compile --warnings-as-errors
 * [Configuration reference](docs/configuration.md)
 * [Architecture: event correlation and exception capture](docs/architecture.md)
 * [Task propagation](docs/task_propagation.md)
+* [GenServer propagation](docs/genserver_propagation.md)
+* [Compatibility: verified and untested combinations](docs/compatibility.md)
 * [Performance: benchmark method, results, overhead budget](docs/performance.md)
 * [Storage, overload and finding reports](docs/storage.md)
 * [Phase 2 review: lifecycle, bounds, security, interface changes](docs/phase2_review.md)
 * [Phase 3 review: storage inspection, overload guarantees, security, interface changes](docs/phase3_review.md)
+* [Phase 4 review: GenServer propagation, persistence, drop records, compatibility](docs/phase4_review.md)
 * Sample reports generated by `demo/scripts/run_demo.sh`:
-  [request failure](docs/sample_report.json), [failure in a child task](docs/sample_task_report.json)
+  [request failure](docs/sample_report.json), [failure in a child task](docs/sample_task_report.json),
+  [failure in a traced GenServer call](docs/sample_server_report.json)
 
 ## Limitations
 
 These are deliberate and documented:
 
-* **Request process plus explicitly wrapped work only.** Events are
+* **Request process plus explicitly propagated work only.** Events are
   attributed to a request only if they are emitted by the process that
-  handles it, or by a function wrapped with `TraceGuard.wrap/1`. Plain
-  `Task`s, `GenServer`s and other nodes are not included, and task events
+  handles it, by a function wrapped with `TraceGuard.wrap/1`, or by a
+  `TraceGuard.Server`'s `handle_call/3` during a `TraceGuard.call/3`. Plain
+  `Task`s, ordinary GenServer calls, casts, a server's background work, and
+  other nodes are not included, and task events
   that arrive after the request completes are dropped. (Transactions are
   fine: `Repo.transaction/2` runs its function in the calling process.)
   Nothing is inferred from timing. See
@@ -245,16 +269,20 @@ These are deliberate and documented:
 * **Linked tasks.** If a `Task.async` task crashes, the link kills the request
   process before Phoenix can render an error, so no report is produced. Use
   `Task.Supervisor.async_nolink/3` for work that may fail.
-* **In-memory storage only.** Reports are local to one node and lost on
-  restart, including submissions still queued when the store crashes (those
-  are counted as `:lost`, without trace IDs). Under a burst, reports beyond
-  `max_pending_reports` are refused, not queued. Reports are stored
-  asynchronously, so use `await_report/2` rather than reading immediately.
-  No persistent adapter exists yet.
-* **Measured on one machine.** Overhead figures come from one laptop with
-  SQLite, in-process. Latency deltas are noisy (the benchmark shows the
-  drift); allocation figures are reliable. Nothing has been measured under
-  PostgreSQL, Cowboy, real network I/O, multiple nodes or long-running load.
+* **Storage is local.** The default store is in memory and is lost on
+  restart. The SQLite adapter persists reports for development and testing:
+  one file, one writer, about 0.4 ms per report, no encryption at rest, and
+  not a production recommendation. Under a burst, reports beyond
+  `max_pending_reports` are refused, not queued. Submissions queued when a
+  store crashes are recorded as `{:dropped, :lost}`. Drop records live in
+  memory, are bounded, and expire; after that a trace reads as `:unknown`.
+* **Measured and verified on one machine.** Overhead figures come from one
+  laptop (WSL2) with SQLite, in-process. Latency deltas are noisy (the
+  benchmark shows the drift); allocation figures are reliable. The
+  compatibility matrix covers the library on four Elixir/OTP/dependency
+  rows; the demo ran on one. PostgreSQL, Cowboy, other Ecto versions,
+  macOS/Windows, releases, multiple nodes and long-running load are
+  untested.
 
 ## Roadmap
 
@@ -268,13 +296,18 @@ These are deliberate and documented:
   * report discovery without a response header;
   * the `TraceGuard.Storage` behaviour with a contract suite;
   * paired, alternating benchmark rounds that show drift.
-* **Phase 4 (proposed, not implemented):**
-  * explicit propagation for `GenServer` calls;
-  * a benchmark run against PostgreSQL and Cowboy on a quiet, dedicated
-    machine;
-  * an optional persistent storage adapter, built on the Phase 3 contract;
-  * a bounded record of recently dropped trace IDs, so `await_report/2` can
-    report drops that happened before it was called.
+* **Phase 4 (done):**
+  * explicit GenServer call propagation;
+  * a persistent SQLite adapter on the storage contract;
+  * a bounded drop record with `report_status/1`;
+  * the compatibility matrix and Phase 4 cost benchmarks.
+* **Phase 5 (proposed, not implemented):**
+  * a Cowboy and PostgreSQL verification run on a quiet, dedicated machine
+    (including the Ecto event shape on older `ecto_sql`);
+  * cheaper collector start for propagating requests (pooling or lazy
+    start);
+  * `cast` support for `TraceGuard.Server`;
+  * an ExDoc build and Hex release checklist.
 * **Later:** LiveView and Oban events, optional log capture, ExDoc and Hex
   release, a local developer UI, OpenTelemetry interoperability.
 

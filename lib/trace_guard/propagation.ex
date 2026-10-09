@@ -76,10 +76,28 @@ defmodule TraceGuard.Propagation do
     end
   end
 
-  defp bind(token, fun) when is_function(fun, 0), do: fn -> run(token, fun, []) end
-  defp bind(token, fun) when is_function(fun, 1), do: fn arg -> run(token, fun, [arg]) end
+  # How work run under a token is labelled and which lifecycle events it
+  # records. A `throw` from a GenServer callback is a valid way to return a
+  # reply (gen_server catches it), so for servers it counts as a return.
+  @task %{
+    kind: "task",
+    type: "task",
+    start: "task.start",
+    stop: "task.stop",
+    exception: "task.exception",
+    metadata: %{},
+    throw_returns?: false
+  }
 
-  defp capture do
+  defp bind(token, fun) when is_function(fun, 0), do: fn -> run(token, fun, [], @task) end
+  defp bind(token, fun) when is_function(fun, 1), do: fn arg -> run(token, fun, [arg], @task) end
+
+  @doc false
+  # The token for the calling process's trace, starting its collector if
+  # needed; nil when there is no active trace (or the collector limit is
+  # reached). Used by wrap/1 and TraceGuard.Server.call/3.
+  @spec capture() :: Token.t() | nil
+  def capture do
     case Context.current() do
       %Context{tasks: %Token{} = token} ->
         token
@@ -109,48 +127,100 @@ defmodule TraceGuard.Propagation do
     end
   end
 
-  defp run(%Token{trace_id: trace_id} = token, fun, args) do
+  @doc false
+  # Runs a GenServer callback (as a 0-arity fun) under `token`, if any.
+  def run_server_call(nil, _server, _request, fun), do: fun.()
+
+  # A token from another node (a call to a remote server) is unusable here:
+  # its :atomics reference is node-local. Run the callback untraced rather
+  # than risk an error inside the server's handle_call/3.
+  def run_server_call(%Token{collector: collector}, _server, _request, fun)
+      when node(collector) != node(),
+      do: fun.()
+
+  def run_server_call(%Token{} = token, server, request, fun) do
+    spec = %{
+      kind: "server",
+      type: "genserver",
+      start: "genserver.call.start",
+      stop: "genserver.call.stop",
+      exception: "genserver.call.exception",
+      metadata: %{server: module_name(server), operation: operation(request)},
+      throw_returns?: true
+    }
+
+    run(token, fun, [], spec)
+  end
+
+  # Only a code-defined atom naming the operation is recorded, never the
+  # request's data: :refresh, or :quote for {:quote, sku, qty}.
+  defp operation(request) when is_atom(request), do: request
+
+  defp operation(request) when is_tuple(request) and is_atom(elem(request, 0)),
+    do: elem(request, 0)
+
+  defp operation(_request), do: nil
+
+  defp module_name(module) do
+    case Atom.to_string(module) do
+      "Elixir." <> name -> name
+      other -> other
+    end
+  end
+
+  defp run(%Token{trace_id: trace_id} = token, fun, args, spec) do
     case Context.current() do
       # Already in the process that owns this trace: nothing to propagate.
       %Context{trace_id: ^trace_id, role: :request} ->
         apply(fun, args)
 
       previous ->
-        run_in_task_context(token, previous, fun, args)
+        run_in_context(token, previous, fun, args, spec)
     end
   end
 
-  defp run_in_task_context(token, previous, fun, args) do
+  defp run_in_context(token, previous, fun, args, spec) do
     previous_logger_id = Logger.metadata()[:trace_guard_id]
 
     Context.put(%Context{
       trace_id: token.trace_id,
       started_mono: System.monotonic_time(),
       started_at: nil,
-      request: %{},
       role: :task,
-      tasks: token
+      tasks: token,
+      request: %{kind: spec.kind}
     })
 
     Logger.metadata(trace_guard_id: token.trace_id)
     started = System.monotonic_time()
-    EventCollector.record("task.start", "task", %{})
+    EventCollector.record(spec.start, spec.type, spec.metadata)
 
     try do
       result = apply(fun, args)
 
-      EventCollector.record("task.stop", "task", %{},
+      EventCollector.record(spec.stop, spec.type, spec.metadata,
         duration: System.monotonic_time() - started,
         outcome: "ok"
       )
 
       result
     catch
+      :throw, value when spec.throw_returns? ->
+        EventCollector.record(spec.stop, spec.type, spec.metadata,
+          duration: System.monotonic_time() - started,
+          outcome: "ok"
+        )
+
+        throw(value)
+
       kind, reason ->
         EventCollector.record(
-          "task.exception",
-          "task",
-          %{kind: Atom.to_string(kind), exception: exception_name(kind, reason)},
+          spec.exception,
+          spec.type,
+          Map.merge(spec.metadata, %{
+            kind: Atom.to_string(kind),
+            exception: exception_name(kind, reason)
+          }),
           duration: System.monotonic_time() - started,
           outcome: "error"
         )
@@ -176,14 +246,18 @@ defmodule TraceGuard.Propagation do
 
   @doc false
   # Sends an event to the trace's collector if the shared budget allows it.
-  def send_event(%Token{} = token, event, max_events) do
+  # Runs inside application code (task functions, server callbacks), so it
+  # must never raise.
+  def send_event(%Token{} = token, kind, event, max_events) do
     if :atomics.add_get(token.counter, @sent, 1) <= max_events do
-      send(token.collector, {:trace_guard_event, token.trace_id, self(), event})
+      send(token.collector, {:trace_guard_event, token.trace_id, self(), kind, event})
       :ok
     else
       :atomics.add(token.counter, @dropped, 1)
       :dropped
     end
+  rescue
+    ArgumentError -> :dropped
   end
 
   @doc false

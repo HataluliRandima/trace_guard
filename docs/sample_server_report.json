@@ -1,0 +1,297 @@
+{
+    "duration_us": 25895,
+    "events": [
+        {
+            "duration_us": null,
+            "metadata": {},
+            "name": "request.start",
+            "offset_us": 18,
+            "outcome": null,
+            "process": "request",
+            "seq": 1,
+            "type": "request"
+        },
+        {
+            "duration_us": null,
+            "metadata": {},
+            "name": "phoenix.endpoint.start",
+            "offset_us": 40,
+            "outcome": null,
+            "process": "request",
+            "seq": 2,
+            "type": "endpoint"
+        },
+        {
+            "duration_us": null,
+            "metadata": {
+                "action": "create",
+                "pipe_through": [
+                    "api"
+                ],
+                "plug": "TraceGuardDemoWeb.QuoteController",
+                "route": "/api/quote"
+            },
+            "name": "phoenix.router_dispatch.start",
+            "offset_us": 2779,
+            "outcome": null,
+            "process": "request",
+            "seq": 3,
+            "type": "router"
+        },
+        {
+            "duration_us": null,
+            "metadata": {
+                "operation": "quote",
+                "server": "TraceGuardDemo.Pricing"
+            },
+            "name": "genserver.call.start",
+            "offset_us": 9221,
+            "outcome": null,
+            "process": "server-1",
+            "seq": 4,
+            "type": "genserver"
+        },
+        {
+            "duration_us": 249,
+            "metadata": {
+                "decode_time_us": 1,
+                "num_rows": 1,
+                "origin": "TraceGuardDemo.Pricing.handle_call (overridable 2)/3 (lib/trace_guard_demo/pricing.ex:41)",
+                "query_time_us": 208,
+                "queue_time_us": 39,
+                "repo": "TraceGuardDemo.Repo",
+                "source": "products",
+                "sql": "SELECT p0.\"id\", p0.\"sku\", p0.\"name\", p0.\"price_cents\", p0.\"stock\", p0.\"inserted_at\", p0.\"updated_at\" FROM \"products\" AS p0 WHERE (p0.\"sku\" = ?)"
+            },
+            "name": "ecto.query",
+            "offset_us": 9611,
+            "outcome": "ok",
+            "process": "server-1",
+            "seq": 5,
+            "type": "db"
+        },
+        {
+            "duration_us": 5320,
+            "metadata": {
+                "exception": "TraceGuardDemo.Pricing.CurrencyError",
+                "kind": "error",
+                "operation": "quote",
+                "server": "TraceGuardDemo.Pricing"
+            },
+            "name": "genserver.call.exception",
+            "offset_us": 14537,
+            "outcome": "error",
+            "process": "server-1",
+            "seq": 6,
+            "type": "genserver"
+        },
+        {
+            "duration_us": 22172,
+            "metadata": {
+                "action": "create",
+                "exception": "TraceGuardDemo.Pricing.CurrencyError",
+                "kind": "exit",
+                "pipe_through": [
+                    "api"
+                ],
+                "plug": "TraceGuardDemoWeb.QuoteController",
+                "route": "/api/quote"
+            },
+            "name": "phoenix.router_dispatch.exception",
+            "offset_us": 25082,
+            "outcome": "error",
+            "process": "request",
+            "seq": 7,
+            "type": "exception"
+        },
+        {
+            "duration_us": null,
+            "metadata": {
+                "exception": "TraceGuardDemo.Pricing.CurrencyError",
+                "kind": "exit",
+                "status": 500
+            },
+            "name": "phoenix.error_rendered",
+            "offset_us": 25764,
+            "outcome": "error",
+            "process": "request",
+            "seq": 8,
+            "type": "exception"
+        }
+    ],
+    "events_dropped": 0,
+    "failure": {
+        "captured_by": "phoenix.router_dispatch.exception",
+        "exception": "TraceGuardDemo.Pricing.CurrencyError",
+        "kind": "exit",
+        "message": "GenServer.call/3 exited: process crashed: currency service rejected conversion (rate_api_token=[REDACTED])",
+        "plug_status": null,
+        "stacktrace": [
+            {
+                "application": "elixir",
+                "file": "lib/gen_server.ex",
+                "function": "call/3",
+                "line": 1128,
+                "module": "GenServer"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/controllers/quote_controller.ex",
+                "function": "create/2",
+                "line": 7,
+                "module": "TraceGuardDemoWeb.QuoteController"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/controllers/quote_controller.ex",
+                "function": "action/2",
+                "line": 1,
+                "module": "TraceGuardDemoWeb.QuoteController"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/controllers/quote_controller.ex",
+                "function": "phoenix_controller_pipeline/2",
+                "line": 1,
+                "module": "TraceGuardDemoWeb.QuoteController"
+            },
+            {
+                "application": "phoenix",
+                "file": "lib/phoenix/router.ex",
+                "function": "__call__/5",
+                "line": 428,
+                "module": "Phoenix.Router"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/endpoint.ex",
+                "function": "plug_builder_call/2",
+                "line": 1,
+                "module": "TraceGuardDemoWeb.Endpoint"
+            },
+            {
+                "application": "trace_guard_demo",
+                "file": "lib/trace_guard_demo_web/endpoint.ex",
+                "function": "call/2",
+                "line": 1,
+                "module": "TraceGuardDemoWeb.Endpoint"
+            },
+            {
+                "application": "phoenix",
+                "file": "lib/phoenix/endpoint/sync_code_reload_plug.ex",
+                "function": "do_call/4",
+                "line": 22,
+                "module": "Phoenix.Endpoint.SyncCodeReloadPlug"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/pipeline.ex",
+                "function": "call_plug!/2",
+                "line": 129,
+                "module": "Bandit.Pipeline"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/pipeline.ex",
+                "function": "run/5",
+                "line": 42,
+                "module": "Bandit.Pipeline"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/http1/handler.ex",
+                "function": "handle_data/3",
+                "line": 23,
+                "module": "Bandit.HTTP1.Handler"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/delegating_handler.ex",
+                "function": "handle_data/3",
+                "line": 18,
+                "module": "Bandit.DelegatingHandler"
+            },
+            {
+                "application": "bandit",
+                "file": "lib/bandit/delegating_handler.ex",
+                "function": "handle_continue/2",
+                "line": 8,
+                "module": "Bandit.DelegatingHandler"
+            },
+            {
+                "application": "stdlib",
+                "file": "gen_server.erl",
+                "function": "try_handle_continue/3",
+                "line": 1067,
+                "module": ":gen_server"
+            },
+            {
+                "application": "stdlib",
+                "file": "gen_server.erl",
+                "function": "loop/7",
+                "line": 977,
+                "module": ":gen_server"
+            },
+            {
+                "application": "stdlib",
+                "file": "proc_lib.erl",
+                "function": "init_p_do_apply/3",
+                "line": 241,
+                "module": ":proc_lib"
+            }
+        ]
+    },
+    "generated_at": "2026-10-09T23:09:08.518632Z",
+    "limitations": [
+        "Only telemetry events emitted by the request-handling process, or by functions wrapped with TraceGuard.wrap/1, are included; work in other processes (plain Task, GenServer, etc.) is not correlated.",
+        "Individual function calls are not traced; the timeline contains only the Phoenix and Ecto telemetry events listed in the report.",
+        "Request bodies, query strings, cookies and SQL parameter values are never captured.",
+        "Task events are included only if they reached TraceGuard before the request completed; work still running at that point is not shown."
+    ],
+    "outcome": "exception",
+    "redaction": {
+        "applied": true,
+        "placeholder": "[REDACTED]",
+        "redacted_values": 0,
+        "scrubbed_message_values": 1,
+        "sensitive_keys": [
+            "password",
+            "authorization",
+            "token",
+            "access_token",
+            "refresh_token",
+            "secret",
+            "api_key",
+            "cookie",
+            "private_key",
+            "card_number",
+            "cvc"
+        ]
+    },
+    "request": {
+        "headers": {
+            "accept": "*/*",
+            "content-type": "application/json",
+            "user-agent": "curl/8.5.0"
+        },
+        "incoming_id": {
+            "header": "x-correlation-id",
+            "value": "demo-quote-121344-1791587348"
+        },
+        "method": "POST",
+        "path": null,
+        "request_id": "GNz_M4L8ee81JvIAAAAI",
+        "route": "/api/quote",
+        "started_at": "2026-10-09T23:09:08.492722Z"
+    },
+    "response": {
+        "status": 500
+    },
+    "schema": "traceguard.report/v1",
+    "tasks": {
+        "events": 3,
+        "processes": 1,
+        "status": "complete"
+    },
+    "trace_id": "dc3cb7a7b259b3d548d448969a61cb39"
+}

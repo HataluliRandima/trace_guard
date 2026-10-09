@@ -94,7 +94,11 @@ defmodule Bench do
       {"4. GET /api/inventory/audit (success, 151 queries > max_events)",
        req("GET", "/api/inventory/audit"), TraceGuard.ReportStore, true},
       {"5. GET /api/catalog/parallel (success, 4 queries in 4 wrapped Tasks)",
-       req("GET", "/api/catalog/parallel"), TraceGuard.ReportStore, true}
+       req("GET", "/api/catalog/parallel"), TraceGuard.ReportStore, true},
+      {"6. POST /api/quote (success, 1 traced GenServer call with 1 query)",
+       req("POST", "/api/quote", Jason.encode!(%{sku: "TG-001", qty: 2}), [
+         {"content-type", "application/json"}
+       ]), TraceGuard.ReportStore, true}
     ]
   end
 
@@ -354,7 +358,7 @@ cold =
 ## 2. Sanity checks: same responses in both modes; reports only when enabled.
 
 IO.puts("Sanity checks...")
-expected = [200, 200, 500, 500, 200, 200]
+expected = [200, 200, 500, 500, 200, 200, 200]
 
 for enabled? <- [false, true] do
   statuses =

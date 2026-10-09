@@ -16,6 +16,8 @@ defmodule TraceGuardDemo.Application do
       {Phoenix.PubSub, name: TraceGuardDemo.PubSub},
       # Unlinked tasks for work whose failure must not kill the request process.
       {Task.Supervisor, name: TraceGuardDemo.TaskSupervisor},
+      # Long-lived server with explicit TraceGuard propagation (use TraceGuard.Server).
+      TraceGuardDemo.Pricing,
       # Start a worker by calling: TraceGuardDemo.Worker.start_link(arg)
       # {TraceGuardDemo.Worker, arg},
       # Start to serve requests, typically the last entry
