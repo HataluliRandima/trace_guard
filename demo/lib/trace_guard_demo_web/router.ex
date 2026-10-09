@@ -1,0 +1,26 @@
+defmodule TraceGuardDemoWeb.Router do
+  use TraceGuardDemoWeb, :router
+
+  pipeline :api do
+    plug :accepts, ["json"]
+  end
+
+  scope "/api", TraceGuardDemoWeb do
+    pipe_through :api
+
+    get "/health", HealthController, :show
+    get "/products", ProductController, :index
+    post "/checkout", CheckoutController, :create
+    post "/inventory/sync", InventoryController, :sync
+  end
+
+  # Diagnostic reports are for developers only; never expose them in production.
+  if Application.compile_env(:trace_guard_demo, :expose_trace_reports, false) do
+    scope "/dev/traces", TraceGuardDemoWeb do
+      pipe_through :api
+
+      get "/", TraceReportController, :index
+      get "/:trace_id", TraceReportController, :show
+    end
+  end
+end
