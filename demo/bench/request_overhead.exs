@@ -8,11 +8,23 @@
 # TraceGuardDemoWeb.Endpoint.call/2 (Plug.Test adapter, no sockets), so the
 # measurement isolates server-side request handling from network noise.
 #
+# Method (see docs/performance.md):
+#   * Paired, alternating rounds: in every round each scenario is measured
+#     disabled and enabled back to back, and the order flips every round and
+#     every scenario, so slow drift of the machine does not systematically
+#     favour one mode.
+#   * Deltas are computed per round (enabled - disabled of the same round)
+#     and reported as median and range across rounds.
+#   * Report retention is separated: scenario 3 runs once with the real
+#     in-memory store and once with a discarding adapter, and the store's own
+#     processing is measured on its own.
+#
 # Environment variables (seconds unless noted):
-#   BENCH_WARMUP       warm-up per scenario            (default 2)
-#   BENCH_TIME         measurement time per scenario   (default 5)
-#   BENCH_MEMORY_TIME  memory measurement per scenario (default 1)
-#   BENCH_PARALLEL     processes for the throughput run (default 4)
+#   BENCH_ROUNDS       paired rounds per scenario            (default 3)
+#   BENCH_WARMUP       warm-up per measurement               (default 1)
+#   BENCH_TIME         timing per measurement                (default 3)
+#   BENCH_MEMORY_TIME  memory measurement per measurement    (default 1)
+#   BENCH_CONCURRENT   set to N to add an N-process pass on read-only scenarios
 #   BENCH_OUTPUT       markdown summary path (default bench/results/latest.md)
 
 defmodule Bench do
@@ -25,30 +37,35 @@ defmodule Bench do
     end
   end
 
-  ## TraceGuard switching
+  ## Configuration switching (outside any measurement)
 
-  # Same validated application config, only :enabled differs. Benchee runs
-  # before_scenario hooks in every parallel process, so only the first one to
-  # arrive rewrites the config (a :persistent_term write forces a global GC).
-  def configure(enabled?) do
-    if TraceGuard.Config.get().enabled != enabled?, do: put_config(enabled?)
-    TraceGuard.clear_reports()
-  end
-
-  defp put_config(enabled?) do
+  def base_config do
     :trace_guard
     |> Application.get_all_env()
     |> Enum.reject(fn {key, _} -> String.starts_with?(Atom.to_string(key), "Elixir.") end)
-    |> Keyword.put(:enabled, enabled?)
-    |> TraceGuard.Config.put!()
+  end
 
-    TraceGuard.Telemetry.attach()
+  # Same validated application config; only :enabled and, for scenario 3b,
+  # :storage differ. Writing :persistent_term forces a global GC, so this is
+  # done only when something changes.
+  def configure(enabled?, storage \\ TraceGuard.ReportStore) do
+    config = TraceGuard.Config.get()
+
+    if config.enabled != enabled? or config.storage != storage do
+      base_config()
+      |> Keyword.merge(enabled: enabled?, storage: storage)
+      |> TraceGuard.Config.put!()
+
+      TraceGuard.Telemetry.attach()
+    end
+
+    TraceGuard.clear_reports()
   end
 
   ## Requests
 
-  def scenarios do
-    checkout_body =
+  def checkout_request do
+    body =
       Jason.encode!(%{
         sku: "TG-001",
         quantity: 2,
@@ -56,19 +73,28 @@ defmodule Bench do
         card: %{card_number: "4242424242424242", cvc: "123"}
       })
 
+    req("POST", "/api/checkout", body, [
+      {"content-type", "application/json"},
+      {"authorization", "Bearer demo-user-session-token"},
+      {"x-api-key", "demo-client-key-123"}
+    ])
+  end
+
+  # {name, request, storage used when enabled, read_only?}
+  def scenarios do
     [
-      {"1. GET /api/health (success, no DB)", req("GET", "/api/health")},
-      {"2. GET /api/catalog (success, 4 Ecto queries)", req("GET", "/api/catalog")},
-      {"3. POST /api/checkout (exception, 5 queries, report built)",
-       req("POST", "/api/checkout", checkout_body, [
-         {"content-type", "application/json"},
-         {"authorization", "Bearer demo-user-session-token"},
-         {"x-api-key", "demo-client-key-123"}
-       ])},
+      {"1. GET /api/health (success, no DB)", req("GET", "/api/health"), TraceGuard.ReportStore,
+       true},
+      {"2. GET /api/catalog (success, 4 Ecto queries)", req("GET", "/api/catalog"),
+       TraceGuard.ReportStore, true},
+      {"3a. POST /api/checkout (exception; report built and stored)", checkout_request(),
+       TraceGuard.ReportStore, false},
+      {"3b. POST /api/checkout (exception; report built, discarded)", checkout_request(),
+       Bench.DiscardStorage, false},
       {"4. GET /api/inventory/audit (success, 151 queries > max_events)",
-       req("GET", "/api/inventory/audit")},
+       req("GET", "/api/inventory/audit"), TraceGuard.ReportStore, true},
       {"5. GET /api/catalog/parallel (success, 4 queries in 4 wrapped Tasks)",
-       req("GET", "/api/catalog/parallel")}
+       req("GET", "/api/catalog/parallel"), TraceGuard.ReportStore, true}
     ]
   end
 
@@ -96,7 +122,7 @@ defmodule Bench do
 
   # The Plug.Test adapter messages the caller on every response; drop them
   # so the benchmarking process's mailbox does not grow during the run.
-  defp flush_mailbox do
+  def flush_mailbox do
     receive do
       _ -> flush_mailbox()
     after
@@ -104,75 +130,198 @@ defmodule Bench do
     end
   end
 
-  ## Reporting
+  ## Measurement
 
-  def summary(suite, title, parallel) do
-    by_input = Enum.group_by(suite.scenarios, & &1.input_name)
+  # One Benchee run for one scenario in one mode. Returns plain numbers.
+  def measure({_name, request, storage, _read_only}, mode, settings, parallel) do
+    configure(mode == :on, storage)
 
+    suite =
+      Benchee.run(%{"run" => fn -> request(request) end},
+        warmup: settings.warmup,
+        time: settings.time,
+        memory_time: if(parallel == 1, do: settings.memory_time, else: 0),
+        parallel: parallel,
+        percentiles: [50, 99],
+        print: [benchmarking: false, configuration: false, fast_warning: false],
+        formatters: []
+      )
+
+    [scenario] = suite.scenarios
+    stats = scenario.run_time_data.statistics
+
+    %{
+      median: stats.median,
+      p99: stats.percentiles[99],
+      throughput: parallel * 1.0e9 / stats.average,
+      samples: stats.sample_size,
+      memory: scenario.memory_usage_data.statistics.median,
+      system: suite.system
+    }
+  end
+
+  # Paired, alternating rounds. Returns %{scenario_name => [{off, on}, ...]}.
+  def run_rounds(scenarios, settings, parallel) do
+    for {scenario, s_index} <- Enum.with_index(scenarios), into: %{} do
+      {name, _, _, _} = scenario
+
+      rounds =
+        for round <- 1..settings.rounds do
+          order = if rem(round + s_index, 2) == 0, do: [:off, :on], else: [:on, :off]
+          IO.puts("  #{name} | round #{round} | order #{inspect(order)}")
+          results = Map.new(order, &{&1, measure(scenario, &1, settings, parallel)})
+          {results.off, results.on}
+        end
+
+      {name, rounds}
+    end
+  end
+
+  ## Statistics and formatting
+
+  def median([]), do: nil
+
+  def median(values) do
+    sorted = Enum.sort(values)
+    n = length(sorted)
+    mid = div(n, 2)
+
+    if rem(n, 2) == 1,
+      do: Enum.at(sorted, mid),
+      else: (Enum.at(sorted, mid - 1) + Enum.at(sorted, mid)) / 2
+  end
+
+  def range(values), do: {Enum.min(values), Enum.max(values)}
+
+  def us(ns) when is_number(ns), do: :erlang.float_to_binary(ns / 1000, decimals: 1) <> " µs"
+  def us(_), do: "n/a"
+
+  def kb(bytes) when is_number(bytes),
+    do: :erlang.float_to_binary(bytes / 1024, decimals: 1) <> " KB"
+
+  def kb(_), do: "n/a"
+
+  def signed(value, fun), do: if(value >= 0, do: "+" <> fun.(value), else: "−" <> fun.(-value))
+
+  def range_cell({min, max}, fun), do: "#{fun.(min)} – #{fun.(max)}"
+
+  def results_table(results, scenarios, with_memory?) do
     rows =
-      for {input, _} <- scenarios(), Map.has_key?(by_input, input) do
-        off = Enum.find(by_input[input], &(&1.job_name == "TraceGuard disabled"))
-        on = Enum.find(by_input[input], &(&1.job_name == "TraceGuard enabled"))
-        row(input, off, on, parallel)
+      for {name, _, _, _} <- scenarios, Map.has_key?(results, name) do
+        rounds = results[name]
+        offs = Enum.map(rounds, &elem(&1, 0))
+        ons = Enum.map(rounds, &elem(&1, 1))
+        deltas = Enum.map(rounds, fn {off, on} -> on.median - off.median end)
+        p99_deltas = Enum.map(rounds, fn {off, on} -> on.p99 - off.p99 end)
+
+        tp =
+          Enum.map(rounds, fn {off, on} ->
+            (on.throughput - off.throughput) / off.throughput * 100
+          end)
+
+        memory =
+          if with_memory? do
+            {lo, hi} = rounds |> Enum.map(fn {off, on} -> on.memory - off.memory end) |> range()
+
+            [
+              if(lo == hi,
+                do: signed(lo, &kb/1),
+                else: "#{signed(lo, &kb/1)} … #{signed(hi, &kb/1)}"
+              )
+            ]
+          else
+            []
+          end
+
+        cells =
+          [
+            name,
+            us(median(Enum.map(offs, & &1.median))),
+            range_cell(range(Enum.map(offs, & &1.median)), &us/1),
+            us(median(Enum.map(ons, & &1.median))),
+            signed(median(deltas), &us/1),
+            range_cell(range(deltas), fn v -> signed(v, &us/1) end),
+            signed(median(p99_deltas), &us/1),
+            signed(median(tp), &:erlang.float_to_binary(&1, decimals: 1)) <> "%"
+          ] ++ memory
+
+        "| " <> Enum.join(cells, " | ") <> " |"
       end
 
-    """
-    ### #{title}
+    memory_header = if with_memory?, do: " Δ memory |", else: ""
+    memory_align = if with_memory?, do: " --: |", else: ""
 
-    | Scenario | Median off | Median on | Δ median | p99 off | p99 on | Throughput off | Throughput on | Δ throughput | Memory off | Memory on | Δ memory | Samples off / on |
-    | --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+    """
+    | Scenario | Off median | Off range (drift) | On median | Δ median | Δ range | Δ p99 | Δ throughput |#{memory_header}
+    | --- | --: | --: | --: | --: | --: | --: | --: |#{memory_align}
     #{Enum.join(rows, "\n")}
     """
   end
 
-  defp row(input, off, on, parallel) do
-    [mo, mn] = Enum.map([off, on], & &1.run_time_data.statistics.median)
-    [po, pn] = Enum.map([off, on], & &1.run_time_data.statistics.percentiles[99])
-    [to, tn] = Enum.map([off, on], &(parallel * 1.0e9 / &1.run_time_data.statistics.average))
-    [so, sn] = Enum.map([off, on], & &1.run_time_data.statistics.sample_size)
-    [bo, bn] = Enum.map([off, on], & &1.memory_usage_data.statistics.median)
+  def raw_table(results, scenarios) do
+    rows =
+      for {name, _, _, _} <- scenarios,
+          Map.has_key?(results, name),
+          {{off, on}, round} <- Enum.with_index(results[name], 1) do
+        "| #{name} | #{round} | #{us(off.median)} | #{us(on.median)} | #{us(off.p99)} | " <>
+          "#{us(on.p99)} | #{kb(off.memory)} | #{kb(on.memory)} | #{off.samples} / #{on.samples} |"
+      end
 
-    cells = [
-      input,
-      us(mo),
-      us(mn),
-      "#{us(mn - mo)} (#{pct(mn, mo)})",
-      us(po),
-      us(pn),
-      rate(to),
-      rate(tn),
-      pct(tn, to),
-      kb(bo),
-      kb(bn),
-      if(bo && bn, do: "#{kb(bn - bo)} (#{pct(bn, bo)})", else: "n/a"),
-      "#{so} / #{sn}"
-    ]
-
-    "| " <> Enum.join(cells, " | ") <> " |"
+    """
+    | Scenario | Round | Off median | On median | Off p99 | On p99 | Off memory | On memory | Samples off / on |
+    | --- | --: | --: | --: | --: | --: | --: | --: | --: |
+    #{Enum.join(rows, "\n")}
+    """
   end
 
-  defp us(ns) when is_number(ns), do: :erlang.float_to_binary(ns / 1000, decimals: 1) <> " µs"
-  defp us(_), do: "n/a"
+  # Benchee runs each benchmark function in its own process, so stored
+  # events go to whichever process registered itself as the waiter.
+  def forward_stored(_event, _measurements, %{trace_id: id}, name) do
+    if pid = Process.whereis(name), do: send(pid, {:stored, id})
+  end
 
-  defp kb(nil), do: "n/a"
-  defp kb(bytes), do: :erlang.float_to_binary(bytes / 1024, decimals: 1) <> " KB"
+  def register_waiter(name) do
+    case Process.whereis(name) do
+      pid when pid == self() ->
+        true
 
-  defp rate(per_s), do: "#{round(per_s)}/s"
+      nil ->
+        Process.register(self(), name)
 
-  defp pct(_new, old) when old in [nil, 0, +0.0], do: "n/a"
-  defp pct(nil, _old), do: "n/a"
-
-  defp pct(new, old) do
-    value = (new - old) / old * 100
-    sign = if value >= 0, do: "+", else: ""
-    sign <> :erlang.float_to_binary(value, decimals: 1) <> "%"
+      _other ->
+        Process.unregister(name)
+        Process.register(self(), name)
+    end
   end
 end
 
-warmup = Bench.env_number("BENCH_WARMUP", 2)
-time = Bench.env_number("BENCH_TIME", 5)
-memory_time = Bench.env_number("BENCH_MEMORY_TIME", 1)
-parallel = Bench.env_number("BENCH_PARALLEL", 4)
+defmodule Bench.DiscardStorage do
+  @moduledoc false
+  # Accepts and immediately forgets reports: isolates building a report from
+  # retaining it.
+  @behaviour TraceGuard.Storage
+  @impl true
+  def put(_report, _opts), do: {:ok, :stored}
+  @impl true
+  def get(_id, _opts), do: :error
+  @impl true
+  def list(_opts), do: []
+  @impl true
+  def delete(_id, _opts), do: :ok
+  @impl true
+  def clear(_opts), do: :ok
+  @impl true
+  def stats(_opts), do: %{adapter: __MODULE__}
+end
+
+settings = %{
+  rounds: Bench.env_number("BENCH_ROUNDS", 3),
+  warmup: Bench.env_number("BENCH_WARMUP", 1),
+  time: Bench.env_number("BENCH_TIME", 3),
+  memory_time: Bench.env_number("BENCH_MEMORY_TIME", 1)
+}
+
+concurrent = Bench.env_number("BENCH_CONCURRENT", 0)
 output = System.get_env("BENCH_OUTPUT", "bench/results/latest.md")
 
 ## 1. One-time costs (separated from steady state)
@@ -185,87 +334,141 @@ Logger.configure(level: Application.get_env(:logger, :level, :error))
 {tg_reload_us, _} =
   :timer.tc(fn -> TraceGuard.Config.load!() && TraceGuard.Telemetry.attach() end)
 
-{app_start_us, {:ok, _}} = :timer.tc(fn -> Application.ensure_all_started(:trace_guard_demo) end)
+{app_start_us, {:ok, _}} =
+  :timer.tc(fn -> Application.ensure_all_started(:trace_guard_demo) end)
 
 # Deterministic fixture: the same two products every run.
 TraceGuardDemo.Repo.delete_all(TraceGuardDemo.Shop.Order)
 TraceGuardDemo.Repo.delete_all(TraceGuardDemo.Shop.Product)
 Code.eval_file("priv/repo/seeds.exs")
 
-Bench.configure(true)
+IO.puts("Measuring one-time costs (first request per scenario)...")
 
 cold =
-  for {name, request} <- Bench.scenarios() do
+  for {name, request, storage, _} <- Bench.scenarios() do
+    Bench.configure(true, storage)
     {us, status} = :timer.tc(fn -> Bench.request(request) end)
     {name, us, status}
   end
 
 ## 2. Sanity checks: same responses in both modes; reports only when enabled.
 
-expected = [200, 200, 500, 200, 200]
+IO.puts("Sanity checks...")
+expected = [200, 200, 500, 500, 200, 200]
 
 for enabled? <- [false, true] do
-  Bench.configure(enabled?)
-  statuses = Enum.map(Bench.scenarios(), fn {_, request} -> Bench.request(request) end)
-  statuses == expected || raise "unexpected statuses #{inspect(statuses)} (enabled: #{enabled?})"
-  Process.sleep(50)
-  reports = length(TraceGuard.list_reports())
+  statuses =
+    Enum.map(Bench.scenarios(), fn {_, request, storage, _} ->
+      Bench.configure(enabled?, storage)
+      Bench.request(request)
+    end)
 
-  if reports != if(enabled?, do: 1, else: 0),
-    do: raise("expected #{if enabled?, do: 1, else: 0} report(s), got #{reports}")
+  statuses == expected ||
+    raise "unexpected statuses #{inspect(statuses)} (enabled: #{enabled?})"
 end
 
-## 3. Steady-state benchmarks
+Bench.configure(false)
+Bench.request(Bench.checkout_request())
+[] = TraceGuard.list_reports()
 
-jobs = %{
-  "TraceGuard disabled" =>
-    {&Bench.request/1, before_scenario: fn input -> Bench.configure(false) && input end},
-  "TraceGuard enabled" =>
-    {&Bench.request/1, before_scenario: fn input -> Bench.configure(true) && input end}
-}
+stored_handler = {:bench, :stored}
 
-sequential =
-  Benchee.run(jobs,
-    inputs: Bench.scenarios(),
-    warmup: warmup,
-    time: time,
-    memory_time: memory_time,
+:telemetry.attach(
+  stored_handler,
+  [:trace_guard, :report, :stored],
+  &Bench.forward_stored/4,
+  :bench_report_waiter
+)
+
+Bench.register_waiter(:bench_report_waiter)
+Bench.configure(true)
+Bench.request(Bench.checkout_request())
+sample_id = receive(do: ({:stored, id} -> id))
+{:ok, sample_report} = TraceGuard.get_report(sample_id)
+
+## 3. Report retention, measured on its own (store process work)
+
+IO.puts("Measuring report retention...")
+
+retention =
+  Benchee.run(
+    %{
+      "submit + retain one report" => fn ->
+        Bench.register_waiter(:bench_report_waiter)
+        report = %{sample_report | "trace_id" => TraceGuard.Context.generate_trace_id()}
+        id = report["trace_id"]
+        {:ok, :queued} = TraceGuard.Storage.put(report)
+        receive(do: ({:stored, ^id} -> :ok))
+      end
+    },
+    warmup: settings.warmup,
+    time: settings.time,
     percentiles: [50, 99],
-    formatters: [{Benchee.Formatters.Console, extended_statistics: true}]
+    print: [benchmarking: false, configuration: false, fast_warning: false],
+    formatters: []
   )
 
-# Read-only scenarios only: SQLite serialises writers, so the checkout
-# scenario would mostly measure database lock contention.
-read_only = Enum.reject(Bench.scenarios(), fn {name, _} -> name =~ "checkout" end)
+:telemetry.detach(stored_handler)
+[retention_scenario] = retention.scenarios
+retention_stats = retention_scenario.run_time_data.statistics
+report_bytes = :erts_debug.flat_size(sample_report) * :erlang.system_info(:wordsize)
+report_json = byte_size(Jason.encode!(sample_report))
 
-concurrent =
-  Benchee.run(jobs,
-    inputs: read_only,
-    warmup: warmup,
-    time: time,
-    parallel: parallel,
-    percentiles: [50, 99],
-    formatters: [{Benchee.Formatters.Console, extended_statistics: true}]
-  )
+## 4. Steady state: paired alternating rounds
 
-## 4. Markdown summary
+IO.puts("\nSequential rounds:")
+sequential = Bench.run_rounds(Bench.scenarios(), settings, 1)
 
-system = sequential.system
-trace_guard_config = TraceGuard.Config.get() |> Map.from_struct() |> Map.delete(:enabled)
+concurrent_results =
+  if concurrent > 1 do
+    read_only = Enum.filter(Bench.scenarios(), &elem(&1, 3))
+    IO.puts("\nConcurrent rounds (#{concurrent} processes):")
+    Bench.run_rounds(read_only, settings, concurrent)
+  end
+
+## 5. Markdown summary
+
+system = sequential |> Map.values() |> hd() |> hd() |> elem(0) |> Map.fetch!(:system)
+
+{git_rev, _} = System.cmd("git", ["rev-parse", "--short", "HEAD"], stderr_to_stdout: true)
+{git_status, _} = System.cmd("git", ["status", "--porcelain"], stderr_to_stdout: true)
+dirty = if String.trim(git_status) == "", do: "clean", else: "with uncommitted changes"
+
+on_median = fn name ->
+  sequential[name] |> Enum.map(fn {_, on} -> on.median end) |> Bench.median()
+end
+
+submit_delta =
+  on_median.("3a. POST /api/checkout (exception; report built and stored)") -
+    on_median.("3b. POST /api/checkout (exception; report built, discarded)")
+
+concurrent_section =
+  if concurrent_results do
+    read_only = Enum.filter(Bench.scenarios(), &elem(&1, 3))
+
+    "## Steady state, #{concurrent} concurrent processes (read-only scenarios)\n\n" <>
+      Bench.results_table(concurrent_results, read_only, false)
+  else
+    "Concurrent pass not run (set `BENCH_CONCURRENT=4` to add it)."
+  end
 
 markdown = """
 # TraceGuard request-overhead benchmark
 
-Generated #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()} by `MIX_ENV=bench mix bench.requests`.
+Generated #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()} by
+`MIX_ENV=bench mix bench.requests` at commit `#{String.trim(git_rev)}` (#{dirty}).
 
-## Environment
+## Environment and settings
 
 * Elixir #{system.elixir}, Erlang/OTP #{system.erlang}, JIT #{system.jit_enabled?}
 * #{system.os}, #{system.num_cores} cores, #{system.cpu_speed}, #{system.available_memory}
 * Demo app in `MIX_ENV=bench` (no code reloader, Logger level `:error`, SQLite file DB, pool size 5)
 * Dispatch: in-process `TraceGuardDemoWeb.Endpoint.call/2` via `Plug.Test`, no sockets
-* Warm-up #{warmup}s, measurement #{time}s, memory measurement #{memory_time}s per scenario and mode
-* TraceGuard config (both modes, except `enabled`): `#{inspect(trace_guard_config, limit: :infinity)}`
+* #{settings.rounds} paired rounds per scenario; per measurement: warm-up #{settings.warmup}s,
+  timing #{settings.time}s, memory #{settings.memory_time}s; the off/on order alternates per
+  round and scenario
+* TraceGuard config (both modes, except `enabled` and, for 3b, `storage`):
+  `#{inspect(Bench.base_config(), limit: :infinity)}`
 
 ## One-time costs (not included below)
 
@@ -275,15 +478,34 @@ Generated #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8
 * First request per scenario after boot (TraceGuard enabled; includes lazy module loading):
 #{Enum.map_join(cold, "\n", fn {name, us, status} -> "  * #{name}: #{us} µs (status #{status})" end)}
 
-## Steady state
+## Steady state, sequential
 
-Latency columns are per request. "Throughput" is `parallel / average latency`
-for the measuring process(es). Memory is the median allocated **by the
-request process** per request (Benchee `memory_time`); allocations in other
-processes (e.g. TraceGuard's report store) are not included.
+"Off range (drift)" is the spread of the disabled medians across rounds, i.e.
+how much the machine itself moved. Δ values are enabled − disabled within the
+same round; the table shows their median and range across rounds. Memory is
+allocated **by the request process** (Benchee `memory_time`); a report sent
+to the store is copied into the store's heap and is not included.
 
-#{Bench.summary(sequential, "Sequential (1 process)", 1)}
-#{Bench.summary(concurrent, "Concurrent (#{parallel} processes, read-only scenarios, no memory measurement)", parallel)}
+#{Bench.results_table(sequential, Bench.scenarios(), true)}
+
+Report submission cost in the request process (3a − 3b, enabled medians):
+#{Bench.signed(submit_delta, &Bench.us/1)}.
+
+## Report retention (store process), measured separately
+
+* Submit one checkout report and wait for its `[:trace_guard, :report, :stored]` event:
+  median #{Bench.us(retention_stats.median)}, p99 #{Bench.us(retention_stats.percentiles[99])}
+  (#{retention_stats.sample_size} samples).
+* Size of that report: #{report_bytes} bytes as an Erlang term (flat size), #{report_json} bytes
+  as JSON. At that size, the default bounds (`max_reports: 50` retained plus
+  `max_pending_reports: 50` queued) hold at most about
+  #{Float.round(report_bytes * 100 / 1_048_576, 1)} MB of reports.
+
+#{concurrent_section}
+
+## Raw per-round measurements (sequential)
+
+#{Bench.raw_table(sequential, Bench.scenarios())}
 """
 
 File.mkdir_p!(Path.dirname(output))

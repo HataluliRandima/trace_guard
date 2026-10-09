@@ -45,37 +45,49 @@ defmodule TraceGuardDemo.Fixtures do
     end)
   end
 
-  def fetch_report!(trace_id, attempts \\ 50) do
-    case TraceGuard.get_report(trace_id) do
-      {:ok, report} ->
-        report
-
-      {:error, :not_found} when attempts > 0 ->
-        Process.sleep(2)
-        fetch_report!(trace_id, attempts - 1)
-
-      other ->
-        raise "no report for #{inspect(trace_id)}: #{inspect(other)}"
+  # Event-driven (TraceGuard.await_report/2), no polling.
+  def fetch_report!(trace_id, timeout \\ 1_000) do
+    case TraceGuard.await_report(trace_id, timeout) do
+      {:ok, report} -> report
+      other -> raise "no report for #{inspect(trace_id)}: #{inspect(other)}"
     end
   end
 
   @doc """
-  For responses without an x-traceguard-id header (exits, throws): waits
-  for the asynchronously stored report of `route` and returns it.
+  For responses without an x-traceguard-id header (exits, throws): waits for
+  the stored report of `route`. Subscribes to TraceGuard's report events
+  before checking, so a report stored in between is not missed.
   """
-  def fetch_report_for_route!(route, attempts \\ 50) do
-    case Enum.find(TraceGuard.list_reports(), &(&1["route"] == route)) do
-      %{"trace_id" => id} ->
-        fetch_report!(id)
+  def fetch_report_for_route!(route, timeout \\ 1_000) do
+    handler = {__MODULE__, make_ref()}
+    parent = self()
 
-      nil when attempts > 0 ->
-        Process.sleep(2)
-        fetch_report_for_route!(route, attempts - 1)
+    :telemetry.attach(
+      handler,
+      [:trace_guard, :report, :stored],
+      &__MODULE__.forward_stored/4,
+      parent
+    )
 
-      nil ->
-        raise "no report for route #{route}"
+    try do
+      case TraceGuard.list_reports(route: route) do
+        [%{"trace_id" => id} | _] ->
+          fetch_report!(id)
+
+        [] ->
+          receive do
+            {:trace_guard_stored, id, %{"route" => ^route}} -> fetch_report!(id)
+          after
+            timeout -> raise "no report for route #{route}"
+          end
+      end
+    after
+      :telemetry.detach(handler)
     end
   end
+
+  def forward_stored(_event, _measurements, meta, pid),
+    do: send(pid, {:trace_guard_stored, meta.trace_id, meta.summary})
 
   def ecto_sql(report) do
     for %{"name" => "ecto.query", "metadata" => meta} <- report["events"], do: meta["sql"]

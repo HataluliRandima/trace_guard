@@ -31,7 +31,10 @@ config :trace_guard,
   # Demo only: these headers are captured to show that sensitive ones are
   # redacted. Capturing credentials is not recommended.
   capture_request_headers: ["accept", "content-type", "user-agent", "authorization", "x-api-key"],
-  redact_keys: ["card_number", "cvc"]
+  redact_keys: ["card_number", "cvc"],
+  # Lets clients send a correlation ID; used to find reports of failures
+  # whose response carries no x-traceguard-id header (exits, throws).
+  incoming_header: "x-correlation-id"
 
 # Configure Elixir's Logger
 config :logger, :default_formatter,

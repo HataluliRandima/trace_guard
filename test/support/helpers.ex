@@ -19,26 +19,63 @@ defmodule TraceGuard.TestHelpers do
 
   def base_config, do: @base
 
-  @doc """
-  Fetches a report, allowing briefly for the asynchronous store write.
-
-  ReportStore.put/1 is a cast. When the request ran in the test process the
-  cast is always processed before a later call from that process; requests
-  run in other processes (Tasks) get a short retry window.
-  """
-  def fetch_report!(trace_id, attempts \\ 50) do
-    case TraceGuard.get_report(trace_id) do
-      {:ok, report} ->
-        report
-
-      {:error, :not_found} when attempts > 0 ->
-        Process.sleep(2)
-        fetch_report!(trace_id, attempts - 1)
-
-      other ->
-        raise "no report for #{inspect(trace_id)}: #{inspect(other)}"
+  @doc "Waits (event-driven, no polling) for the report of `trace_id`."
+  def fetch_report!(trace_id, timeout \\ 1_000) do
+    case TraceGuard.await_report(trace_id, timeout) do
+      {:ok, report} -> report
+      other -> raise "no report for #{inspect(trace_id)}: #{inspect(other)}"
     end
   end
+
+  @doc """
+  Waits for the first stored report whose summary matches `filters`, for
+  failures whose response carries no trace header. Subscribes before
+  checking, so a report stored in between is not missed.
+  """
+  def fetch_report_where!(filters, timeout \\ 1_000) do
+    handler = attach_report_events()
+
+    try do
+      case TraceGuard.list_reports(filters) do
+        [%{"trace_id" => id} | _] -> fetch_report!(id)
+        [] -> wait_for_match(filters, timeout)
+      end
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
+  defp wait_for_match(filters, timeout) do
+    receive do
+      {:report_event, :stored, _id} ->
+        case TraceGuard.list_reports(filters) do
+          [%{"trace_id" => id} | _] -> fetch_report!(id)
+          [] -> wait_for_match(filters, timeout)
+        end
+    after
+      timeout -> raise "no report matching #{inspect(filters)}"
+    end
+  end
+
+  @doc "Forwards [:trace_guard, :report, :stored | :dropped] events to the caller."
+  def attach_report_events do
+    id = {__MODULE__, make_ref()}
+
+    :telemetry.attach_many(
+      id,
+      [[:trace_guard, :report, :stored], [:trace_guard, :report, :dropped]],
+      &__MODULE__.forward_report_event/4,
+      self()
+    )
+
+    id
+  end
+
+  def forward_report_event([:trace_guard, :report, :stored], _, meta, pid),
+    do: send(pid, {:report_event, :stored, meta.trace_id})
+
+  def forward_report_event([:trace_guard, :report, :dropped], _, meta, pid),
+    do: send(pid, {:report_event, {:dropped, meta.reason}, meta.trace_id})
 
   def trace_id(conn_or_headers)
 

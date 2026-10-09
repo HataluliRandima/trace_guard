@@ -27,12 +27,16 @@ The business logic (`lib/trace_guard_demo/shop.ex`, `payments.ex`) contains
 | `GET /api/catalog/parallel` | The same 4 queries, each in a `Task` wrapped with `TraceGuard.wrap/1`. No report. |
 | `POST /api/inventory/reconcile` | **Deliberate failure in a child task.** Two unlinked wrapped tasks read stock; the "warehouse feed" task raises `WarehouseError`. `Task.await/2` exits the request process, and Phoenix returns a generic 500. Reported, with both tasks' events. |
 | `GET /api/inventory/audit` | 151 single-row queries (an N+1 pattern), which overflows the 100-event buffer. Used by the benchmark. |
-| `GET /dev/traces` | List of stored reports (dev/test only). |
+| `GET /dev/traces` | Summaries of stored reports (dev/test only). Accepts `list_reports/1` filters as query parameters, e.g. `?incoming_id=...`, `?route=/api/checkout&status=500`. |
 | `GET /dev/traces/:trace_id` | One full report (dev/test only). |
 
 The `/dev/traces` routes are compiled in only when
 `config :trace_guard_demo, :expose_trace_reports` is true (`config/dev.exs`,
 `config/test.exs`).
+
+`config/config.exs` sets `incoming_header: "x-correlation-id"`, so a client
+can send its own ID and find the report even when the response carries no
+`x-traceguard-id` header (as for the reconcile failure, which exits).
 
 `config/dev.exs` sets `debug_errors: false`, so you see the response an
 ordinary API client gets instead of Phoenix's debug page.
@@ -77,7 +81,10 @@ MIX_ENV=bench mix run --no-start bench/event_cost.exs
 ```
 
 `config/bench.exs` is a production-like environment with its own SQLite
-database. The method and results are in
+database. The benchmark runs paired, alternating rounds (off and on back to
+back, order flipped each round) and reports machine drift next to each
+delta. It also measures report retention separately from request handling.
+The method and results are in
 [../docs/performance.md](../docs/performance.md); the raw result files of
 every run cited there are in `bench/results/`.
 

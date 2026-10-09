@@ -157,9 +157,14 @@ defmodule TraceGuard.EventCollector do
   `:task_drain_timeout` ms) or discarded without waiting (successful ones).
   Only the process that owns the trace can complete it.
 
-  Returns `{:reported, trace_id}`, `:ok` (no failure) or `:no_context`.
+  Returns `{:reported, trace_id}` when the storage adapter accepted the
+  report, `{:dropped, trace_id, reason}` when it did not (for example
+  `:overloaded`), `:ok` (no failure) or `:no_context`. The trace context is
+  removed *before* the report is stored, so storage can never add events to
+  any trace.
   """
-  @spec finish(integer() | nil) :: {:reported, String.t()} | :ok | :no_context
+  @spec finish(integer() | nil) ::
+          {:reported, String.t()} | {:dropped, String.t(), term()} | :ok | :no_context
   def finish(status) do
     config = Config.get()
 
@@ -168,12 +173,15 @@ defmodule TraceGuard.EventCollector do
         ctx = Context.take()
 
         if failed?(ctx, status, config) do
-          ctx
-          |> merge_tasks(config)
-          |> TraceGuard.TraceBuilder.build(status, config)
-          |> TraceGuard.ReportStore.put()
+          report =
+            ctx
+            |> merge_tasks(config)
+            |> TraceGuard.TraceBuilder.build(status, config)
 
-          {:reported, ctx.trace_id}
+          case TraceGuard.Storage.put(report) do
+            {:ok, _accepted} -> {:reported, ctx.trace_id}
+            {:error, reason} -> {:dropped, ctx.trace_id, reason}
+          end
         else
           if match?(%Token{}, ctx.tasks), do: Propagation.discard(ctx.tasks)
           :ok

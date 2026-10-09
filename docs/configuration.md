@@ -40,6 +40,8 @@ is captured unless you opt in.
 | `:max_task_collectors` | `1_000` | Phase 2. Maximum number of traces that can propagate to tasks at the same time (one collector process each). Beyond that, `TraceGuard.wrap/1` returns the plain function and the report says task events are missing. **Read once at application start.** |
 | `:task_drain_timeout` | `100` | Phase 2. Milliseconds a *failed* request waits for its task events when completing. Successful requests never wait. `0` makes draining effectively non-blocking (and usually empty). |
 | `:task_collector_lifetime` | `300_000` | Phase 2. Maximum lifetime of a task collector in milliseconds, a safety net for requests that never complete. Task events of a request that runs longer are lost. |
+| `:storage` | `TraceGuard.ReportStore` | Phase 3. The `TraceGuard.Storage` adapter that receives finished reports: a module, or `{module, opts}`. The adapter configured **at application start** is supervised by TraceGuard if it exports `child_spec/1`. See [storage.md](storage.md). |
+| `:max_pending_reports` | `50` | Phase 3. Maximum report submissions queued for the default `ReportStore` (its mailbox bound). Beyond it, reports are refused with `{:error, :overloaded}` and a `[:trace_guard, :report, :dropped]` event. Read on every submission. |
 
 ## Redaction
 

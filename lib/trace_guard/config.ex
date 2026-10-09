@@ -37,7 +37,9 @@ defmodule TraceGuard.Config do
     ecto_telemetry_prefixes: [],
     max_task_collectors: 1_000,
     task_drain_timeout: 100,
-    task_collector_lifetime: 300_000
+    task_collector_lifetime: 300_000,
+    storage: TraceGuard.ReportStore,
+    max_pending_reports: 50
   ]
 
   @key :"$trace_guard_config"
@@ -60,7 +62,9 @@ defmodule TraceGuard.Config do
           ecto_telemetry_prefixes: [[atom()]],
           max_task_collectors: pos_integer(),
           task_drain_timeout: non_neg_integer(),
-          task_collector_lifetime: pos_integer()
+          task_collector_lifetime: pos_integer(),
+          storage: module() | {module(), keyword()},
+          max_pending_reports: pos_integer()
         }
 
   defstruct Keyword.keys(@defaults)
@@ -144,7 +148,9 @@ defmodule TraceGuard.Config do
       ecto_telemetry_prefixes: prefixes!(merged),
       max_task_collectors: pos_integer!(merged, :max_task_collectors),
       task_drain_timeout: non_neg_integer!(merged, :task_drain_timeout),
-      task_collector_lifetime: pos_integer!(merged, :task_collector_lifetime)
+      task_collector_lifetime: pos_integer!(merged, :task_collector_lifetime),
+      storage: storage!(merged),
+      max_pending_reports: pos_integer!(merged, :max_pending_reports)
     }
   end
 
@@ -231,6 +237,19 @@ defmodule TraceGuard.Config do
 
       other ->
         invalid!(:ecto_telemetry_prefixes, "a list of atom lists", other)
+    end
+  end
+
+  defp storage!(opts) do
+    case Keyword.fetch!(opts, :storage) do
+      module when is_atom(module) and not is_nil(module) ->
+        module
+
+      {module, adapter_opts} = storage when is_atom(module) and is_list(adapter_opts) ->
+        storage
+
+      other ->
+        invalid!(:storage, "a module or {module, keyword}", other)
     end
   end
 

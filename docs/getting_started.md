@@ -129,7 +129,26 @@ crash kills the request process before any error can be rendered or
 reported. See [task_propagation.md](task_propagation.md) for the full
 contract, limits and unsupported cases.
 
-## 7. Optional: expose reports in development
+## 7. Finding a report when the response has no trace header
+
+Throws, exits (including `Task.await/2` on a crashed task) and exceptions in
+endpoint plugs are rendered by Phoenix without TraceGuard's header. To still
+find their reports, let clients send a correlation ID:
+
+```elixir
+config :trace_guard, incoming_header: "x-correlation-id"
+```
+
+```elixir
+TraceGuard.list_reports(incoming_id: "checkout-7f3a")   # exact match
+TraceGuard.list_reports(request_id: "F5zX...")         # from the crash log line
+```
+
+With `metadata: [:request_id, :trace_guard_id]` in your logger format,
+Bandit's crash log line also carries the trace ID. All the options are in
+[storage.md](storage.md#finding-a-report-without-a-response-header).
+
+## 8. Optional: expose reports in development
 
 The demo app adds a development-only controller (see
 `demo/lib/trace_guard_demo_web/controllers/trace_report_controller.ex`) that
@@ -144,8 +163,10 @@ rescues exceptions:
 ```elixir
 {500, headers, _body} = assert_error_sent(500, fn -> get(conn, "/boom") end)
 {_, trace_id} = List.keyfind(headers, "x-traceguard-id", 0)
-{:ok, report} = TraceGuard.get_report(trace_id)
+{:ok, report} = TraceGuard.await_report(trace_id, 1_000)
 ```
 
-Reports are written asynchronously. If the request ran in another process
-(for example a `Task`), retry the lookup briefly.
+Reports are stored asynchronously, just after the response.
+`await_report/2` waits for the store's `[:trace_guard, :report, :stored]`
+event, without polling, and returns `{:error, {:dropped, reason}}` if the
+report is refused (for example when the store is overloaded).

@@ -108,6 +108,13 @@ defmodule TraceGuardDemoWeb.DiagnosticsTest do
                json_response(get(build_conn(), ~p"/dev/traces"), 200)["data"]
 
       assert json_response(get(build_conn(), ~p"/dev/traces/nope"), 400)
+
+      assert [%{"trace_id" => ^id}] =
+               json_response(get(build_conn(), "/dev/traces?route=/api/checkout&status=500"), 200)[
+                 "data"
+               ]
+
+      assert [] = json_response(get(build_conn(), "/dev/traces?route=/api/health"), 200)["data"]
       assert json_response(get(build_conn(), ~p"/dev/traces/#{String.duplicate("0", 32)}"), 404)
     end
   end
@@ -123,6 +130,8 @@ defmodule TraceGuardDemoWeb.DiagnosticsTest do
     @tag :capture_log
     test "a failing child task's queries and exception are in the request's report",
          %{conn: conn} do
+      conn = put_req_header(conn, "x-correlation-id", "reconcile-test-1")
+
       {500, headers, body} =
         assert_error_sent(500, fn -> post(conn, ~p"/api/inventory/reconcile") end)
 
@@ -131,8 +140,11 @@ defmodule TraceGuardDemoWeb.DiagnosticsTest do
       # Task.await exits the request process; Phoenix renders exits with the
       # endpoint's original conn, so the trace header is absent (documented).
       assert trace_id(headers) == nil
-      [%{"trace_id" => id, "route" => "/api/inventory/reconcile"}] = TraceGuard.list_reports()
-      report = fetch_report!(id)
+      # The caller's correlation ID finds it (incoming_header in config.exs).
+      report = fetch_report_for_route!("/api/inventory/reconcile")
+
+      assert [%{"trace_id" => id}] = TraceGuard.list_reports(incoming_id: "reconcile-test-1")
+      assert id == report["trace_id"]
 
       assert report["failure"]["kind"] == "exit"
       assert report["failure"]["exception"] == "TraceGuardDemo.Shop.WarehouseError"

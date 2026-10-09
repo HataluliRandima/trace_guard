@@ -17,7 +17,8 @@ Phoenix 1.8.15, Plug 1.20.3, Ecto SQL 3.14.0 and Bandit 1.12.5.
 | `TraceGuard.Telemetry` | Attaches handlers and turns telemetry metadata into allow-listed event fields. |
 | `TraceGuard.TraceBuilder` | Orders events, converts times, makes values JSON-safe, then redacts. |
 | `TraceGuard.Redactor` | Key normalization, recursive redaction, message scrubbing. |
-| `TraceGuard.ReportStore` | Bounded in-memory GenServer of finished, redacted reports. |
+| `TraceGuard.Storage` | Storage behaviour plus facade: exception safety, counters, `[:trace_guard, :report, :stored \| :dropped]` events, summaries (Phase 3). |
+| `TraceGuard.ReportStore` | Default storage adapter: bounded in-memory GenServer with bounded admission (`max_reports`, `max_pending_reports`). |
 | `TraceGuard.Exporter.JSON` | Jason encoding and file export. |
 | `TraceGuard.Propagation` | `wrap/1`: opt-in propagation of a trace into selected processes (Phase 2). |
 | `TraceGuard.TaskCollector` | Per-trace process that receives the events of wrapped work; bounded and always terminating (Phase 2). |
@@ -160,7 +161,10 @@ When a request completes, still in the request process:
    `"(pid)"`; invalid UTF-8 becomes `"(binary, N bytes)"`; long strings and
    lists are truncated; nesting depth is capped.
 4. **Redact** sensitive keys everywhere and scrub the exception message.
-5. **Store** the result with an asynchronous cast to `ReportStore`.
+5. **Submit** the result through `TraceGuard.Storage.put/1` to the
+   configured adapter. The default `ReportStore` admits it (bounded queue)
+   or refuses it with `:overloaded`; either way the outcome is counted and
+   emitted as a telemetry event. See [storage.md](storage.md).
 
 Only the output of step 4 leaves the request process.
 
@@ -205,11 +209,14 @@ and from Phase 2 `task.start`, `task.stop`, `task.exception`.
 * Task propagation: at most `:max_task_collectors` collectors, each bounded
   to `:max_events` events and terminated at request completion, owner exit,
   or `:task_collector_lifetime`.
-* Globally: at most `:max_reports` reports in one GenServer. There are no
-  ETS tables.
-* Handlers do no I/O and make no blocking calls. A report is written with a
-  `GenServer.cast/2`. The only wait is draining task events for a failed
-  request, bounded by `:task_drain_timeout`.
+* Storage (default adapter): at most `:max_reports` retained and
+  `:max_pending_reports` queued submissions. Admission happens in the
+  submitting process before anything is sent, so the store's mailbox is
+  bounded too. There are no ETS tables. See [storage.md](storage.md).
+* Handlers do no I/O and make no blocking calls. Submitting a report is one
+  atomic add and one `send/2`, or an immediate refusal. The only wait is
+  draining task events for a failed request, bounded by
+  `:task_drain_timeout`.
 * Measured overhead and the proposed budget are in
   [performance.md](performance.md). The full bounds review is in
   [phase2_review.md](phase2_review.md).

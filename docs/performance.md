@@ -13,20 +13,27 @@ was produced by the commands below. Raw outputs are in
 
 ```bash
 cd demo
-MIX_ENV=bench mix bench.requests                       # ~3 minutes; writes bench/results/latest.md
+MIX_ENV=bench mix bench.requests                       # ~4 minutes; writes bench/results/latest.md
 MIX_ENV=bench mix run --no-start bench/event_cost.exs  # ~20 seconds; allocation per event
 ```
 
 `bench.requests` creates and migrates a separate SQLite database
 (`trace_guard_demo_bench.db`), reseeds the same two products, and runs
-`bench/request_overhead.exs`. You can tune it with environment variables:
-`BENCH_WARMUP`, `BENCH_TIME`, `BENCH_MEMORY_TIME` (seconds, default 2/5/1),
-`BENCH_PARALLEL` (default 4) and `BENCH_OUTPUT`.
+`bench/request_overhead.exs`. Environment variables:
 
-## Method
+* `BENCH_ROUNDS` (default 3)
+* `BENCH_WARMUP`, `BENCH_TIME`, `BENCH_MEMORY_TIME` (seconds per
+  measurement; defaults 1, 3 and 1)
+* `BENCH_CONCURRENT=N` adds an N-process pass over the read-only scenarios
+* `BENCH_OUTPUT`
+
+For comparable numbers: run on AC power, keep the editor and language server
+idle (it recompiles on file changes), and don't edit files during a run.
+
+## Method (Phase 3)
 
 * **Same application, same requests, two modes.** Only `enabled` differs
-  between "TraceGuard disabled" and "TraceGuard enabled". Everything else is
+  between "off" and "on" (and, for scenario 3b, `storage`). Everything else is
   the demo's real configuration (`capture_sql: true`, five allow-listed
   headers, 100-event buffer). When disabled, `TraceGuard.Plug` returns the conn
   untouched, no handlers are attached, and `TraceGuard.wrap/1` returns its
@@ -35,24 +42,32 @@ MIX_ENV=bench mix run --no-start bench/event_cost.exs  # ~20 seconds; allocation
   code reloader, no SQL sandbox, Logger at `:error`, no dev routes.
 * **In-process dispatch.** Requests go through
   `TraceGuardDemoWeb.Endpoint.call/2` with `Plug.Test`, the same code path
-  as under Bandit but without sockets, so network noise doesn't swamp
-  microsecond-level differences. The test adapter's messages are drained
+  as under Bandit but without sockets. The test adapter's messages are drained
   after every request.
-* **[Benchee](https://hex.pm/packages/benchee) 1.5.1.** Each scenario and
-  mode gets 2 s of warm-up, 5 s of timing and 1 s of memory measurement.
-  It reports the median, the 99th percentile, throughput (`parallel /
-  average`) and memory (the median bytes allocated **by the process handling
-  the request**, which excludes TraceGuard's report store and task
-  collectors).
-* **A second, concurrent pass** runs the read-only scenarios in 4 parallel
-  processes. Checkout is excluded because SQLite serializes writers, so it
-  would mostly measure lock contention.
+* **Paired, alternating rounds.** Each scenario is measured in
+  `BENCH_ROUNDS` rounds. In every round, off and on run back to back, and the
+  order flips every round and every scenario, so a slowly drifting machine
+  doesn't systematically favour one mode. Δ is computed **within each round**
+  and reported as the median and range across rounds.
+* **Drift is shown, not hidden.** "Off range (drift)" is the spread of the
+  disabled medians across rounds. If it is wide, the machine moved during the
+  run, and latency Δs from that run are unreliable.
+* **Build vs retention, separated.** Scenario 3a stores the report in the
+  real `ReportStore`. Scenario 3b builds the identical report and hands it to
+  a discarding adapter. Separately, "submit + retain" times
+  `TraceGuard.Storage.put/1` until the store's `:stored` event, and the
+  report's retained size is recorded.
+* **[Benchee](https://hex.pm/packages/benchee) 1.5.1** per measurement. It
+  reports the median, the 99th percentile, throughput (`1 / average`) and
+  memory (the median bytes allocated **by the request process**). A report
+  sent to the store is copied into the store's heap, so it is not in this
+  figure; that is why it appears separately.
 * **Sanity checks** run before any timing. Both modes must return identical
-  statuses (200, 200, 500, 200, 200), and only the enabled mode may produce a
-  report.
+  statuses, and only the enabled mode may store a report.
 * **One-time costs** are measured separately and excluded: application
-  start, and the first request of each scenario after boot (lazy module
-  loading).
+  start, and the first request of each scenario after boot.
+* **Provenance.** Each output records its commit (and whether the working
+  tree was dirty), versions and all settings.
 
 ### Scenarios
 
@@ -60,9 +75,23 @@ MIX_ENV=bench mix run --no-start bench/event_cost.exs  # ~20 seconds; allocation
 | --- | --- | --- |
 | 1 | `GET /api/health` | Fixed per-request cost; no database. |
 | 2 | `GET /api/catalog` | 4 Ecto queries in the request process. |
-| 3 | `POST /api/checkout` | Transaction with 5 queries, an exception, and a **report built and redacted**. |
+| 3a | `POST /api/checkout` | Transaction with 5 queries, an exception, and a report **built, redacted and stored**. |
+| 3b | same | Same, but the report is **discarded** by a no-op adapter. |
 | 4 | `GET /api/inventory/audit` | 151 queries: fills the 100-event buffer and drops 51+ events. |
-| 5 | `GET /api/catalog/parallel` | The same 4 queries in 4 Tasks wrapped with `TraceGuard.wrap/1` (Phase 2 only). |
+| 5 | `GET /api/catalog/parallel` | The same 4 queries in 4 Tasks wrapped with `TraceGuard.wrap/1`. |
+
+### What SQLite-based measurements can and cannot show
+
+* SQLite runs in-process through a NIF, with no network round trip. Query
+  latency here is much lower than PostgreSQL's (no network, no server
+  process), so TraceGuard's fixed cost is a *larger fraction* of a request
+  here than it would be against a networked database. The absolute
+  per-request and per-event costs are what transfer.
+* SQLite serializes writers, so concurrent write scenarios measure lock
+  contention. The concurrent pass is therefore opt-in and read-only.
+* **Not tested:** PostgreSQL, Cowboy, real network I/O, multiple nodes,
+  long-running load and memory growth over hours. No claims are made about
+  them.
 
 ## Environment
 
@@ -70,9 +99,70 @@ Elixir 1.17.0, Erlang/OTP 26.1.2 (JIT), Linux (WSL2), 12 × Intel Core
 i5-1245U, 7.6 GB RAM, SQLite via `ecto_sqlite3` 0.25 / `exqlite` 0.42,
 Phoenix 1.8.15, Bandit 1.12.5 (not used for dispatch).
 
-## Results
+## Phase 3 results
 
-The benchmark ran at three stages, twice each:
+Two full runs with the default settings (3 rounds; 1 s warm-up, 3 s timing,
+1 s memory per measurement). The raw files are
+[`phase3-run1.md`](../demo/bench/results/phase3-run1.md) and
+[`phase3-run2.md`](../demo/bench/results/phase3-run2.md), which also hold
+per-round data. Both were run from a working tree with the Phase 3 changes
+uncommitted.
+
+| Scenario | Δ median (run 1 / run 2) | Δ range across rounds (run 1 / run 2) | Off drift (run 1 / run 2) | Δ memory (both runs) |
+| --- | --: | --: | --: | --: |
+| 1. health | +5.2 / +11.8 µs | +5.1…+7.7 / +11.0…+14.1 µs | 9.7–11.4 / 11.0–17.8 µs | +5.6 KB |
+| 2. catalog | +113.5 / +118.1 µs | +83…+1460 / +84…+150 µs | 275–348 / 288–343 µs | +11.2 KB |
+| 3a. checkout, stored | +1162 / +1072 µs | +393…+1369 / −107…+2962 µs | **279–870** / **461–1732** µs | +218.1…+218.4 KB |
+| 3b. checkout, discarded | +1732 / +1709 µs | +644…+3354 / +1152…+3031 µs | 481–1412 / 371–488 µs | +218.5 KB |
+| 4. audit | +1321 / +457 µs | +1247…+32975 / −1364…+20466 µs | 16818–17488 / 19409–20387 µs | +117.2 KB |
+| 5. parallel catalog (wrap) | +322 / +231 µs | +243…+453 / −90…+250 µs | 694–846 / 546–789 µs | +6.4 KB |
+
+Report retention, measured separately:
+
+| | Run 1 | Run 2 |
+| --- | --: | --: |
+| Submit + retain one checkout report (until `:stored`), median | 7.8 µs | 14.2 µs |
+| Same, p99 | 162 µs | 202 µs |
+| Retained size of that report (Erlang term / JSON) | 15,296 B / 5,661 B | 15,296 B / 5,649 B |
+
+### Reading these results
+
+* **The machine was noisy during both runs.** The drift column shows it: the
+  *disabled* checkout median moved between 279 and 870 µs within run 1, and
+  between 461 and 1732 µs within run 2. The disabled catalog median was
+  275–348 µs, against 133–141 µs in the quiet Phase 2 runs. Latency Δs from
+  these runs are therefore wide. Before Phase 3 the same noise would have
+  been invisible; the drift column now makes it explicit.
+* **Request-side submission cost is below the noise floor.** 3a and 3b
+  allocate the same in the request process (218.1–218.5 KB). Their latency
+  difference flips sign between runs (3a − 3b = −772 µs and −159 µs, which
+  is not physically meaningful because 3a does strictly more work). The
+  submission is one atomic add and one `send/2`.
+* **Retention costs the store about 8–14 µs per report** (median), off the
+  request path.
+* **Memory figures are reliable** and repeat between runs and rounds.
+  Compared with Phase 2, catalog shows +11.2 KB (Phase 2: 9.2–9.4 KB) and
+  audit +117.2 KB (Phase 2: 132.8 KB). Phase 3 doesn't touch the per-event
+  path, and the measurement procedure changed (separate shorter Benchee runs
+  per measurement), so these differences are not attributed to code changes.
+* **Fixed cost on a successful request:** +5.2 µs in run 1 (tight range
+  +5.1…+7.7 µs). Run 2 measured +11.8 µs on a slower machine state (its
+  disabled baseline was itself 11.0–17.8 µs), plus 5.6 KB.
+
+### Memory bound of the report store
+
+At the defaults (50 retained + 50 queued), the report store holds at most
+100 reports. Measured sizes: the demo checkout report is about 15 KB, so
+about 1.5 MB at the defaults. A near-worst-case report (100 events with
+maximum-length SQL, 20 stack frames, a maximum-length message) is about
+122 KB, so about 12 MB at the defaults. Lower `max_reports`,
+`max_pending_reports` or `max_events` to shrink the bound.
+
+## Phase 2 results (previous method, kept for history)
+
+These runs used the Phase 2 method: one Benchee run per scenario and mode, in a
+fixed off-then-on order, with 2 s warm-up, 5 s timing and 1 s memory. The
+benchmark ran at three stages, twice each:
 
 * **Phase 1 baseline:** Phase 1 code, plus the `Telemetry.attach/0`
   concurrency fix (without it the benchmark crashed; see below).
@@ -197,6 +287,9 @@ not promises:
 | Per dropped event | ≤ 0.5 KB | 0.37 KB | |
 | Report build on failure | ≤ 1 ms, ≤ 256 KB | 0.72–0.86 ms*, 218 KB | Built synchronously in the failing request so that only redacted data leaves the process; this adds latency to responses that are already failing. |
 | `wrap/1` per request (request process) | ≤ 8 KB | 6.3 KB | Latency not budgeted yet: collector start and message passing were within noise (+50 to +223 µs over 4 tasks). |
+| Report submission in the request process (Phase 3) | no measurable cost | 3a vs 3b: same allocation; latency difference below noise | One atomic add and one `send/2`; the report copy is allocated in the store. |
+| Report retention in the store (Phase 3) | ≤ 50 µs median per report | 7.8–14.2 µs | Off the request path. Bounds the drain rate after a burst. |
+| Report store memory at defaults (Phase 3) | ≤ 16 MB | 1.5 MB typical, 12 MB near-worst case | (`max_reports` + `max_pending_reports`) × report size; tune both, or `max_events`. |
 
 \* Measured in the optimized, quiet runs. The final runs on the slower
 machine state measured 1.15–1.46 ms.

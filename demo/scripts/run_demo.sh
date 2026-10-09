@@ -46,11 +46,18 @@ curl -sS --fail "$BASE/dev/traces/$TRACE_ID" | pretty > "$OUT"
 
 echo
 echo "== 6. Failure inside a wrapped child task (TraceGuard.wrap/1)"
-curl -sS -X POST "$BASE/api/inventory/reconcile" -H 'content-type: application/json' -d '{}'; echo
 # The request process exits (Task.await), so Phoenix renders without the
-# trace header; find the report by route instead.
-sleep 0.2
-TASK_TRACE_ID="$(curl -sS "$BASE/dev/traces" | grep -o '"route":"/api/inventory/reconcile","status":500,"trace_id":"[0-9a-f]*"' | head -1 | grep -o '[0-9a-f]\{32\}')"
+# trace header. The client's correlation ID finds the report instead.
+CORRELATION_ID="demo-reconcile-$$-$(date +%s)"
+curl -sS -X POST "$BASE/api/inventory/reconcile" -H 'content-type: application/json' \
+  -H "x-correlation-id: $CORRELATION_ID" -d '{}'; echo
+TASK_TRACE_ID=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  TASK_TRACE_ID="$(curl -sS "$BASE/dev/traces?incoming_id=$CORRELATION_ID" | grep -o '[0-9a-f]\{32\}' | head -1)"
+  [ -n "$TASK_TRACE_ID" ] && break
+  sleep 0.1 # reports are stored asynchronously, just after the response
+done
+echo "Correlation ID $CORRELATION_ID -> trace $TASK_TRACE_ID"
 echo "Exporting report $TASK_TRACE_ID to $TASK_OUT"
 curl -sS --fail "$BASE/dev/traces/$TASK_TRACE_ID" | pretty > "$TASK_OUT"
 

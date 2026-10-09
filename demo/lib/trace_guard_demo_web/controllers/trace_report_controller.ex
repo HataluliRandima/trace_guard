@@ -6,7 +6,27 @@ defmodule TraceGuardDemoWeb.TraceReportController do
   """
   use TraceGuardDemoWeb, :controller
 
-  def index(conn, _params), do: json(conn, %{data: TraceGuard.list_reports()})
+  # Query parameters map to TraceGuard.list_reports/1 filters, e.g.
+  # GET /dev/traces?incoming_id=checkout-42 for failures without a header.
+  @filters %{
+    "incoming_id" => :incoming_id,
+    "request_id" => :request_id,
+    "route" => :route,
+    "method" => :method,
+    "outcome" => :outcome,
+    "kind" => :kind,
+    "exception" => :exception,
+    "status" => :status
+  }
+
+  def index(conn, params) do
+    filters =
+      for {param, value} <- params, Map.has_key?(@filters, param) do
+        {@filters[param], if(param == "status", do: String.to_integer(value), else: value)}
+      end
+
+    json(conn, %{data: TraceGuard.list_reports(filters)})
+  end
 
   def show(conn, %{"trace_id" => trace_id}) do
     case TraceGuard.get_report(trace_id) do
