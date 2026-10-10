@@ -35,7 +35,12 @@ defmodule TraceGuard.PostgresSupport do
 
   @db "trace_guard_test"
 
-  def url, do: System.get_env("TRACE_GUARD_POSTGRES_URL")
+  def url do
+    case System.get_env("TRACE_GUARD_POSTGRES_URL") do
+      "" -> nil
+      url -> url
+    end
+  end
 
   def repo_config(database \\ @db) do
     uri = URI.parse(url())
@@ -90,4 +95,9 @@ defmodule TraceGuard.PostgresSupport do
   end
 
   def database, do: @db
+
+  def server_version do
+    %{rows: [[version]]} = TraceGuard.TestRepo.query!("SELECT version()", [], log: false)
+    version
+  end
 end

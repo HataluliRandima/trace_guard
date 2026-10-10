@@ -9,7 +9,10 @@
 # a scratch directory, pins dependency requirements in that copy's mix.exs
 # only, resolves them from scratch (no mix.lock) and runs the checks with
 # the requested Elixir/OTP through asdf. The repository is never modified.
-# Requires asdf with the listed versions installed and access to hex.pm.
+# Requires asdf with the listed versions installed, or (as in CI) the row's
+# exact toolchain already first on PATH, and access to hex.pm. Each row
+# first checks that the Elixir and OTP actually running are the row's.
+# Exits non-zero when any selected row fails.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,6 +31,10 @@ ALL_ROWS=(
 )
 
 ROWS="${ROWS:-current minimum elixir117-otp27 latest}"
+for name in $ROWS; do
+  printf '%s\n' "${ALL_ROWS[@]}" | grep -q "^$name|" || { echo "unknown row: $name" >&2; exit 2; }
+done
+STATUS=0
 
 echo "| Row | Elixir | OTP | Resolved phoenix / plug / telemetry / exqlite / ecto_sql / postgrex | deps.get | compile (warnings as errors) | tests |" > "$SUMMARY"
 echo "| --- | --- | --- | --- | --- | --- | --- |" >> "$SUMMARY"
@@ -64,7 +71,13 @@ for row in "${ALL_ROWS[@]}"; do
   summary_line() { grep -E '([0-9]+ tests?, [0-9]+ failures?|^Result: )' "$1" | tail -1; }
 
   deps="fail"; compile="not run"; tests="not run"; resolved="n/a"
-  if run env MIX_ENV=test mix deps.get; then
+  # The toolchain that will really run (asdf, or whatever is on PATH).
+  actual="$(cd "$dir" && elixir -e 'otp = :erlang.system_info(:otp_release)
+    v = File.read!(Path.join([:code.root_dir(), "releases", otp, "OTP_VERSION"])) |> String.trim()
+    IO.write("#{System.version()} #{v}")' 2>>"$log")"
+  if [ "$actual" != "${elixir%%-otp-*} $erlang" ]; then
+    deps="toolchain mismatch: running '$actual', row wants '${elixir%%-otp-*} $erlang'"
+  elif run env MIX_ENV=test mix deps.get; then
     deps="ok"
     resolved="$(cd "$dir" && for d in phoenix plug telemetry exqlite ecto_sql postgrex; do
       grep -o "\"$d\": {:hex, :$d, \"[^\"]*\"" mix.lock | sed 's/.*, "\(.*\)"/\1/'; done | paste -sd/ -)"
@@ -72,6 +85,8 @@ for row in "${ALL_ROWS[@]}"; do
       compile="ok"
       if run mix test; then
         tests="$(summary_line "$log")"
+        # With a server configured, nothing may be excluded.
+        [[ -n "${TRACE_GUARD_POSTGRES_URL:-}" && "$tests" == *excluded* ]] && tests="FAILED (PostgreSQL tests excluded): $tests"
       else
         tests="FAILED: $(summary_line "$log")"
       fi
@@ -81,8 +96,11 @@ for row in "${ALL_ROWS[@]}"; do
   fi
 
   echo "| $name | $elixir | $erlang | $resolved | $deps | $compile | $tests |" | tee -a "$SUMMARY"
+  [[ "$deps" == ok && "$compile" == ok && "$tests" != FAILED* && "$tests" != "not run" ]] || STATUS=1
 done
 
 echo
 echo "Logs and summary in $WORK"
 cat "$SUMMARY"
+[ "$STATUS" -eq 0 ] && echo "all rows passed" || echo "FAILED: at least one row failed"
+exit "$STATUS"

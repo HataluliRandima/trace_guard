@@ -81,6 +81,29 @@ Observations:
   with different storage will differ. Not measured: remote databases,
   contended pools, large tables (beyond 1,000 rows).
 
+## Phase 7: the Ecto writer under failure
+
+From `bench/ecto_writer_operations.exs`
+([results](https://github.com/HataluliRandima/trace_guard/blob/main/bench/results/phase7-ecto-operations.md)),
+PostgreSQL 18.6 on the same laptop, two runs that agreed:
+
+* **Outage:** each failed write waits about 4 s for the Repo's pool to give
+  up, so the writer drains about 0.25 reports per second. Of 200 reports in
+  a burst, 61 were admitted (and dropped with `:connection` or
+  `:admin_shutdown`) and 139 were refused at admission as `:overloaded`.
+* **Recovery:** the first write committed 0.4–0.9 s after the database
+  accepted connections again.
+* **A 12 s table lock:** 49 of 51 queued reports were stored once the lock
+  was released; 2 were cancelled at `write_timeout`.
+* **Shutdown** with the writer blocked: immediate; queued reports were
+  recorded as `:lost` on restart.
+
+No performance change was made. The single writer's normal throughput
+(about 180 reports per second here, Phase 6) is a documented limit, and
+the outage behaviour is bounded in memory and time. The fix in this phase
+is observability: `report_stats/0` now reports a blocked writer as
+`writer_busy: true` instead of `writer_running: false`.
+
 ## How to run
 
 ```bash

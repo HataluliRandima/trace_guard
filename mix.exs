@@ -83,7 +83,8 @@ defmodule TraceGuard.MixProject do
         "docs/phase3_review.md",
         "docs/phase4_review.md",
         "docs/phase5_review.md",
-        "docs/phase6_review.md"
+        "docs/phase6_review.md",
+        "docs/phase7_review.md"
       ],
       groups_for_extras: [
         Guides: [
@@ -105,7 +106,8 @@ defmodule TraceGuard.MixProject do
           "docs/phase3_review.md",
           "docs/phase4_review.md",
           "docs/phase5_review.md",
-          "docs/phase6_review.md"
+          "docs/phase6_review.md",
+          "docs/phase7_review.md"
         ]
       ],
       groups_for_modules: [

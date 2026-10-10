@@ -3,6 +3,62 @@
 "Supported" here means **verified by running the checks**, not merely
 allowed by the version constraints in `mix.exs`.
 
+## Continuous integration
+
+Two GitHub Actions workflows run the same scripts as the local procedure.
+Every job must pass; none uses `continue-on-error`. Toolchains are exact
+(`version-type: strict`), runners are `ubuntu-24.04`, and third-party
+actions are pinned by commit SHA. PostgreSQL runs as a CI service container
+(`postgres:16`, `postgres:18`) with trust authentication, so no credential
+exists in the repository or in CI secrets.
+
+**`ci.yml`: every pull request, and pushes to `main` and `phase*`:**
+
+| Job | Toolchain | What it checks |
+| --- | --- | --- |
+| Library checks | Elixir 1.17.0 / OTP 26.1.2 | lock file current and minimal, formatting, warnings-as-errors compile (dev, test), tests and doctest without PostgreSQL, ExDoc with warnings as errors, `scripts/package_check.sh`, `mix hex.audit` |
+| Demo application | same | formatting, warnings-as-errors compile (dev, bench), tests |
+| PostgreSQL 16 and PostgreSQL 18 | same | the full suite including the real PostgreSQL tests; fails if any are excluded or if the server isn't the expected major version |
+| Minimum toolchain | Elixir 1.15.8 / OTP 26.1.2 | compatibility row "minimum" (fresh resolution: Phoenix 1.7, Plug 1.14, Telemetry 1.0, `ecto_sql` 3.10, `postgrex` 0.17) against PostgreSQL 16 |
+| Clean install | Elixir 1.17.0 / OTP 26.1.2, `phx_new` 1.8.8 | `scripts/external_postgres_smoke.sh` (fresh Phoenix app on PostgreSQL 16) and `scripts/no_ecto_smoke.sh` (fresh Phoenix app without Ecto) |
+
+**`compat.yml`: weekly (Mondays) and on demand:** rows "current"
+(fresh resolution instead of the lock file, PostgreSQL 16),
+"elixir117-otp27" (PostgreSQL 16) and "latest" (Elixir 1.20.1 / OTP 29.0,
+PostgreSQL 18), plus `scripts/external_smoke.sh` with Bandit and Cowboy ×
+memory and SQLite on Elixir 1.17.1 / OTP 27.0.
+
+**Status: configured, not yet run on GitHub.** The workflows have been
+linted (`actionlint` with `shellcheck`), and every job's `run:` steps were
+executed locally, in order, with the job's exact toolchain (see the table
+below). Service startup, caching, checkout and artifact upload only happen
+on GitHub. The first real run is still to come.
+
+**Locally verified but not in CI:** the demo and the clean-install test on
+other toolchains, PostgreSQL 18 for the clean-install test, and the
+benchmarks.
+
+## Verified (Phase 7)
+
+The jobs of both workflows, run locally with the jobs' exact toolchains
+(asdf) and a user-local PostgreSQL 16.15 or 18.6 (`scripts/local_postgres.sh`;
+PostgreSQL 18 comes from the PostgreSQL project's apt repository, with its
+signature and hashes verified):
+
+| Job / row | Elixir / OTP | PostgreSQL | Resolved Phoenix / Plug / Telemetry / Exqlite / Ecto SQL / Postgrex | Result |
+| --- | --- | --- | --- | --- |
+| Library checks | 1.17.0 / 26.1.2 | none | lock file | ✅ 175 tests + 1 doctest, 0 failures (21 PostgreSQL tests excluded); docs, package, audit ok |
+| PostgreSQL 16 | 1.17.0 / 26.1.2 | 16.15 | lock file | ✅ 175 tests + 1 doctest, none excluded |
+| PostgreSQL 18 | 1.17.0 / 26.1.2 | 18.6 | lock file | ✅ 175 tests + 1 doctest, none excluded |
+| minimum | 1.15.8 / 26.1.2 | 16.15 | 1.7.24 / 1.14.2 / 1.0.0 / 0.42.0 / **3.10.2 / 0.17.5** | ✅ |
+| current (fresh) | 1.17.0 / 26.1.2 | 16.15 | 1.8.15 / 1.20.3 / 1.4.2 / 0.42.0 / 3.14.0 / 0.22.4 | ✅ |
+| elixir117-otp27 | 1.17.1 / 27.0 | 16.15 | 1.8.15 / 1.20.3 / 1.4.2 / 0.42.0 / 3.12.1 / 0.22.4 | ✅ |
+| latest | 1.20.1 / 29.0 | 18.6 | 1.8.15 / 1.20.3 / 1.4.2 / 0.42.0 / 3.14.0 / 0.22.4 | ✅ |
+| Demo | 1.17.0 / 26.1.2 | none | lock file | ✅ 16 tests |
+| Clean install (PostgreSQL) | 1.17.0 / 26.1.2 | 16.15 and 18.6 | `ecto_sql` 3.14.0 in the generated app | ✅ every check, app suite 6 tests |
+| Clean install (no Ecto) | 1.17.0 / 26.1.2 | none | no Ecto in the app's lock file | ✅ 4 tests |
+| External, Bandit and Cowboy × memory and SQLite | 1.17.1 / 27.0 | none | Bandit 1.12, Cowboy 2.20 | ✅ 6 tests per variant |
+
 ## Verified (Phase 6)
 
 `scripts/compat_matrix.sh` copies the library into a scratch directory,
@@ -22,10 +78,10 @@ propagation, and all four storage adapters.
 
 Jason resolved to 1.4.5 in every row.
 
-**PostgreSQL:** 16.15 only (Ubuntu's package, run user-locally with
-`scripts/local_postgres.sh`, TCP on localhost). Other PostgreSQL versions
-are untested; the adapter uses `jsonb`, `bigserial`, `ON CONFLICT` and
-`COMMENT ON`, all available since PostgreSQL 9.5, but that isn't verified.
+**PostgreSQL:** 16.15 in Phase 6; 18.6 added in Phase 7 (see above).
+Versions other than 16 and 18 are untested; the adapter uses `jsonb`,
+`bigserial`, `ON CONFLICT` and `COMMENT ON`, all available since
+PostgreSQL 9.5, but that isn't verified.
 
 The demo application (Ecto SQL 3.14 on SQLite, Bandit 1.12) and its 16 tests
 were run on the "current" row only.
@@ -123,7 +179,7 @@ What the external run found and changed:
 
 ## Not tested (outstanding)
 
-* **PostgreSQL versions other than 16**, managed or remote PostgreSQL
+* **PostgreSQL versions other than 16 and 18**, managed or remote PostgreSQL
   (TLS, poolers such as PgBouncer in transaction mode), MySQL and other Ecto
   adapters. The Ecto adapter refuses non-PostgreSQL repos.
 * **Cowboy on OTP 26** (current Cowboy doesn't compile there), and older

@@ -29,12 +29,18 @@ mkdir -p "$WORK"
   > "$WORK/phx_new.log" 2>&1) || { echo "phx.new failed, see $WORK/phx_new.log"; exit 1; }
 rm -rf "$APP/.git"
 
-# --- 1. Dependency (unreleased package: local path) -------------------------
+# --- 1. Dependency (unreleased package: the built package, as a path) -------
+# `mix hex.build --unpack` yields exactly the files that would ship, so the
+# app can't depend on anything outside the package.
+PKG="$WORK/trace_guard_pkg"
+(cd "$ROOT" && MIX_ENV=dev mix hex.build --unpack -o "$PKG" > "$WORK/hex_build.log" 2>&1) ||
+  { echo "mix hex.build failed, see $WORK/hex_build.log"; exit 1; }
+
 # plug_cowboy only when a Cowboy variant is requested: current Cowboy
 # (2.20, cowlib 2.21) needs OTP 27 or later.
 WITH_COWBOY=0
 [[ " $VARIANTS " == *"cowboy:"* ]] && WITH_COWBOY=1
-python3 - "$APP/mix.exs" "$ROOT" "$WITH_COWBOY" <<'PY'
+python3 - "$APP/mix.exs" "$PKG" "$WITH_COWBOY" <<'PY'
 import sys
 path, root, cowboy = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 s = open(path).read()
@@ -263,7 +269,7 @@ end
 EOF
 
 # --- 6. Install and run each variant ---------------------------------------
-cd "$APP"
+cd "$APP" || exit 1
 mix deps.get > "$WORK/deps.log" 2>&1 || { echo "deps.get failed, see $WORK/deps.log"; exit 1; }
 mix compile --warnings-as-errors > "$WORK/compile.log" 2>&1 || { echo "compile failed, see $WORK/compile.log"; exit 1; }
 

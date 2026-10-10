@@ -90,6 +90,9 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     alias TraceGuard.{Config, Storage}
 
     @admission {__MODULE__, :admission}
+    # The writer answers stats from memory. No answer within this time means
+    # it is inside a slow statement (a lock, an unreachable database).
+    @writer_stats_timeout 1_000
     @table "trace_guard_reports"
     @schema "traceguard.report/v1"
     @options [
@@ -232,9 +235,9 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     def stats(opts) do
       writer =
         try do
-          GenServer.call(__MODULE__, :writer_stats, Keyword.get(opts, :call_timeout, 5_000))
+          GenServer.call(__MODULE__, :writer_stats, @writer_stats_timeout)
         catch
-          :exit, _ -> %{writer_running: false}
+          :exit, _ -> busy_or_down()
         end
 
       retained =
@@ -251,6 +254,17 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
         retained: retained,
         max_pending_reports: Config.get().max_pending_reports
       })
+    end
+
+    # A busy writer is still running: say so, with the queue length from the
+    # admission counter, rather than reporting it as down.
+    defp busy_or_down do
+      with {pid, pending} <- :persistent_term.get(@admission, nil),
+           true <- Process.alive?(pid) do
+        %{writer_running: true, writer_busy: true, pending: :atomics.get(pending, 1)}
+      else
+        _ -> %{writer_running: false}
+      end
     end
 
     # Reads run in the caller, through the application's pool. Any failure
@@ -334,6 +348,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       {:reply,
        %{
          writer_running: true,
+         writer_busy: false,
          pending: :atomics.get(state.pending, 1),
          written: state.written,
          write_errors: state.write_errors,

@@ -27,6 +27,7 @@ TraceGuard.Telemetry.attach()
 # is provided, e.g. TRACE_GUARD_POSTGRES_URL=postgres://postgres@127.0.0.1:54329
 if TraceGuard.PostgresSupport.url() do
   TraceGuard.PostgresSupport.setup!()
+  IO.puts("PostgreSQL suite: enabled, #{TraceGuard.PostgresSupport.server_version()}")
   ExUnit.after_suite(fn _ -> TraceGuard.PostgresSupport.teardown!() end)
   ExUnit.start()
 else

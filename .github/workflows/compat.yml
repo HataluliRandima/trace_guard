@@ -1,0 +1,89 @@
+# Broader compatibility checks, too slow for every pull request: the other
+# rows of scripts/compat_matrix.sh (fresh dependency resolution, real
+# PostgreSQL) and the external Phoenix smoke test with Bandit and Cowboy.
+# Weekly on the default branch, and on demand (Actions -> Compatibility ->
+# Run workflow), for example before a release.
+name: Compatibility
+
+on:
+  schedule:
+    - cron: "17 4 * * 1" # Mondays 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  matrix:
+    name: Row ${{ matrix.row }} (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}, PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # "minimum" runs on every pull request (ci.yml).
+          - { row: current, elixir: "1.17.0", otp: "26.1.2", postgres: "16" }
+          - { row: elixir117-otp27, elixir: "1.17.1", otp: "27.0", postgres: "16" }
+          - { row: latest, elixir: "1.20.1", otp: "29.0", postgres: "18" }
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        # Throwaway server for this job only. Trust authentication: no
+        # credential exists to leak.
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TRACE_GUARD_POSTGRES_URL: postgres://postgres@localhost:5432
+      ROWS: ${{ matrix.row }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+          version-type: strict
+      - name: Compatibility row (fresh resolution, warnings as errors, full suite)
+        run: WORK="$RUNNER_TEMP/compat" scripts/compat_matrix.sh
+      - name: Keep logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compat-${{ matrix.row }}-logs
+          path: ${{ runner.temp }}/compat/*.log
+          retention-days: 7
+
+  external:
+    name: Fresh Phoenix app, Bandit and Cowboy x memory and SQLite (Elixir 1.17.1 / OTP 27.0)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OTP 27+: current Cowboy (cowlib 2.21) doesn't compile on OTP 26.
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "27.0"
+          elixir-version: "1.17.1"
+          version-type: strict
+      - name: Phoenix generator (pinned)
+        run: mix archive.install hex phx_new 1.8.8 --force
+      - name: External smoke test, all four variants
+        run: WORK="$RUNNER_TEMP/external" scripts/external_smoke.sh
+      - name: Keep logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: external-smoke-logs
+          path: ${{ runner.temp }}/external/*.log
+          retention-days: 7

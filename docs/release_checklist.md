@@ -1,7 +1,27 @@
 # Release checklist
 
 Steps for cutting a TraceGuard release. **Publishing is a manual, human
-step.** Nothing in this repository publishes automatically.
+step.** Nothing in this repository publishes automatically, and no CI
+workflow has publishing credentials.
+
+## 0. External preview gate (0.1.0-rc.1)
+
+Every box must be ticked, with evidence (a link or a log), before the
+release candidate is announced as an external preview. Status as of the
+Phase 7 review ([phase7_review.md](phase7_review.md)):
+
+| # | Item | Evidence required | Status |
+| --- | --- | --- | --- |
+| 1 | **CI green** | a passing `CI` run on GitHub for the commit to release: library checks, demo, minimum toolchain | ☐ workflows written and their steps pass locally; **never run on GitHub** |
+| 2 | **Real PostgreSQL CI green** | the `PostgreSQL 16` and `PostgreSQL 18` jobs of that run, with no excluded tests | ☐ passes locally against 16.15 and 18.6; **not yet on GitHub** |
+| 3 | **Clean migration workflow verified** | the `Clean install` job of that run | ☐ passes locally (PostgreSQL 16 and 18); **not yet on GitHub** |
+| 4 | **Compatibility workflow green** | one manual run of `Compatibility` (Actions → Compatibility → Run workflow) | ☐ passes locally; **not yet on GitHub** |
+| 5 | **Supported toolchain documented** | [compatibility.md](compatibility.md) matches the CI matrix | ☑ |
+| 6 | **Security limitations disclosed** | [security.md](security.md): logs aren't sanitized, PostgreSQL deletion is logical, SQLite caveats | ☑ |
+| 7 | **Experimental API boundaries clear** | ExDoc groups; `TraceGuard.Server`, `TraceGuard.Storage` and its adapters, the migration and its task are labelled experimental | ☑ (CI passing doesn't make them stable) |
+| 8 | **Git history and integration plan agreed** | the maintainer has decided how Phase 7 reaches `main` (see phase7_review.md) | ☐ maintainer decision |
+| 9 | **Release notes ready** | `CHANGELOG.md` entry; an announcement that says "experimental preview" and lists the limits | ☐ changelog done; announcement not written |
+| 10 | **Tag exists** | `v0.1.0-rc.1` points at the released commit (ExDoc's source links use it) | ☐ maintainer action, step 10 |
 
 ## 1. Clean state
 
@@ -22,11 +42,15 @@ mix test                           # expect 0 failures
 
 ## 2b. Real PostgreSQL suite (Ecto adapter)
 
+In CI: the `PostgreSQL 16`, `PostgreSQL 18` and `Clean install` jobs.
+Locally, for each major version:
+
 ```bash
-eval "$(scripts/local_postgres.sh start | tail -1)"   # or point TRACE_GUARD_POSTGRES_URL at any PostgreSQL
-mix test                           # must report 0 failures and **no** excluded :postgres tests
-scripts/external_postgres_smoke.sh # fresh Phoenix app on PostgreSQL: must end with exit 0
-scripts/local_postgres.sh stop
+eval "$(PG_MAJOR=16 scripts/local_postgres.sh start | tail -1)"   # or point TRACE_GUARD_POSTGRES_URL at any PostgreSQL
+mix test                           # prints "PostgreSQL suite: enabled, PostgreSQL 16..."; 0 failures, **no** excluded tests
+scripts/external_postgres_smoke.sh # fresh Phoenix app installs TraceGuard, migrates: every line "ok", exit 0
+PG_MAJOR=16 scripts/local_postgres.sh stop
+# repeat with PG_MAJOR=18
 ```
 
 Without `TRACE_GUARD_POSTGRES_URL`, `mix test` excludes the PostgreSQL
@@ -66,6 +90,10 @@ Every variant must `PASS`. The `OBSERVATION` lines show whether the adapter's
 crash log carries the trace ID and the raw secret. Both secrets are expected
 in the log: TraceGuard doesn't sanitize logs.
 
+```bash
+scripts/no_ecto_smoke.sh           # fresh Phoenix app without Ecto: no Ecto deps pulled in, exit 0
+```
+
 ## 6. Documentation
 
 ```bash
@@ -74,6 +102,9 @@ open doc/index.html                # spot-check README, guides, module groups
 ```
 
 ## 7. Package contents (local build only)
+
+`scripts/package_check.sh` does all of this section and exits non-zero on
+any problem (it runs in CI). By hand:
 
 ```bash
 mix hex.build                      # builds trace_guard-<version>.tar locally; does NOT publish

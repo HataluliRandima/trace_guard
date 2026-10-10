@@ -1,0 +1,231 @@
+# Pull-request and branch CI. Every job must pass; nothing here uses
+# continue-on-error. Slower, broader compatibility checks live in
+# compat.yml (weekly and on demand). See docs/compatibility.md.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, "phase*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Explicit bash: -e and -o pipefail, so `cmd | tee log` fails with cmd.
+    shell: bash
+
+env:
+  # The "current" toolchain (docs/compatibility.md); exact versions.
+  ELIXIR_VERSION: "1.17.0"
+  OTP_VERSION: "26.1.2"
+
+jobs:
+  checks:
+    name: Library checks (Elixir 1.17.0 / OTP 26.1.2, no database)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          version-type: strict
+      # Dependencies only, keyed exactly on the lock file and toolchain (no
+      # fallback keys). The project itself is always recompiled (--force).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            deps
+            _build
+          key: library-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+      - name: Dependencies (the lock file must be current and minimal)
+        run: |
+          mix deps.get --check-locked
+          mix deps.unlock --check-unused
+      - name: Formatting
+        run: mix format --check-formatted
+      - name: Compile with warnings as errors (dev and test)
+        run: |
+          mix compile --force --warnings-as-errors
+          MIX_ENV="test" mix compile --force --warnings-as-errors
+      - name: Tests and doctests without PostgreSQL (the PostgreSQL suite is excluded here)
+        run: mix test
+      - name: ExDoc with warnings as errors
+        run: MIX_ENV=dev mix docs --warnings-as-errors
+      - name: Package contents and metadata (local build; nothing is published)
+        run: scripts/package_check.sh
+      - name: No retired dependencies
+        run: mix hex.audit
+
+  demo:
+    name: Demo application
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: demo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          version-type: strict
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            demo/deps
+            demo/_build
+          key: demo-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('demo/mix.lock', 'mix.lock') }}
+      - name: Dependencies
+        run: mix deps.get --check-locked
+      - name: Formatting (app and benchmarks)
+        run: |
+          mix format --check-formatted
+          mix format --check-formatted bench/*.exs
+      - name: Compile with warnings as errors (dev and bench)
+        run: |
+          mix compile --force --warnings-as-errors
+          MIX_ENV=bench mix compile --force --warnings-as-errors
+      - name: Tests
+        run: mix test
+
+  postgres:
+    name: PostgreSQL ${{ matrix.postgres }} (real Ecto adapter suite)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "18"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        # Throwaway server for this job only, reachable from the runner on
+        # localhost. Trust authentication: no credential exists to leak.
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TRACE_GUARD_POSTGRES_URL: postgres://postgres@localhost:5432
+      EXPECTED_POSTGRES: ${{ matrix.postgres }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          version-type: strict
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            deps
+            _build
+          key: library-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+      - name: Dependencies
+        run: mix deps.get --check-locked
+      - name: Compile (test, warnings as errors)
+        run: MIX_ENV="test" mix compile --force --warnings-as-errors
+      - name: Full suite with the real PostgreSQL tests (fails if any are excluded)
+        run: |
+          mix test 2>&1 | tee "$RUNNER_TEMP/test.log"
+          # The suite ran against the intended server version.
+          grep "^PostgreSQL suite: enabled, PostgreSQL $EXPECTED_POSTGRES\." "$RUNNER_TEMP/test.log"
+          if grep -E "[0-9]+ excluded" "$RUNNER_TEMP/test.log"; then
+            echo "::error::PostgreSQL tests were excluded"
+            exit 1
+          fi
+
+  minimum:
+    name: Minimum toolchain (Elixir 1.15.8 / OTP 26.1.2, ecto_sql 3.10, PostgreSQL 16)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TRACE_GUARD_POSTGRES_URL: postgres://postgres@localhost:5432
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "26.1.2"
+          elixir-version: "1.15.8"
+          version-type: strict
+      # Fresh resolution of the lowest supported dependencies (no lock file,
+      # no cache): see the "minimum" row in scripts/compat_matrix.sh.
+      - name: Compatibility row "minimum"
+        run: ROWS=minimum WORK="$RUNNER_TEMP/compat" scripts/compat_matrix.sh
+      - name: Keep logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compat-minimum-logs
+          path: ${{ runner.temp }}/compat/*.log
+          retention-days: 7
+
+  install-postgres:
+    name: Clean Phoenix install and migration workflow (PostgreSQL 16)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TRACE_GUARD_POSTGRES_URL: postgres://postgres@localhost:5432
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          version-type: strict
+      - name: Phoenix generator (pinned)
+        run: mix archive.install hex phx_new 1.8.8 --force
+      - name: Library dependencies (to build the package)
+        run: mix deps.get --check-locked
+      - name: Fresh Phoenix app on PostgreSQL installs TraceGuard and migrates
+        run: WORK="$RUNNER_TEMP/install_postgres" scripts/external_postgres_smoke.sh
+      - name: Fresh Phoenix app without Ecto (optional dependencies stay optional)
+        run: WORK="$RUNNER_TEMP/no_ecto" scripts/no_ecto_smoke.sh
+      - name: Keep logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: install-logs
+          path: |
+            ${{ runner.temp }}/install_postgres/*.log
+            ${{ runner.temp }}/no_ecto/*.log
+          retention-days: 7

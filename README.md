@@ -178,12 +178,17 @@ seven planted secrets appear in them. See [demo/README.md](https://github.com/Ha
 * **Exceptions after the response was sent** are not reported.
 * **Storage:** in memory (lost on restart), SQLite (development and
   testing), or your PostgreSQL through your Ecto Repo (experimental;
-  verified on PostgreSQL 16 only). Under a burst, reports beyond
-  `max_pending_reports` are refused (and recorded as dropped), not queued.
-  Deleting reports from PostgreSQL is logical: copies can remain in WAL,
-  replicas and backups.
-* **Untested:** PostgreSQL versions other than 16, macOS, Windows, releases,
-  multiple nodes, long-running load. See the verified combinations. See
+  verified on PostgreSQL 16 and 18). One writer stores reports one at a
+  time: about 180 reports per second on PostgreSQL on the test laptop, and
+  far fewer while the database is unreachable (each failed write waits for
+  your pool, about 4 s there). Reports beyond `max_pending_reports` are
+  refused and recorded as dropped (`:overloaded`), not queued; during an
+  outage, most drops look like that, and `report_stats().last_error`
+  tells you the cause. Deleting reports from PostgreSQL is logical: copies
+  can remain in WAL, replicas and backups.
+* **Untested:** PostgreSQL versions other than 16 and 18, managed or
+  pooled PostgreSQL (TLS, PgBouncer), macOS, Windows, releases, multiple
+  nodes, long-running load. See
   [docs/compatibility.md](docs/compatibility.md).
 * **Performance** has been measured on one laptop only. Observations, not
   guarantees, are in [docs/performance.md](docs/performance.md).
@@ -191,15 +196,21 @@ seven planted secrets appear in them. See [demo/README.md](https://github.com/Ha
 ## Development
 
 ```bash
-mix test                          # library (148 tests + 1 doctest)
+mix test                          # library (175 tests + 1 doctest; the 21 PostgreSQL tests are excluded without a server)
 (cd demo && mix test)             # demo application (16 tests)
 scripts/compat_matrix.sh          # library on several Elixir/OTP/dependency versions
 scripts/external_smoke.sh         # a fresh Phoenix app integrating TraceGuard (Bandit/Cowboy x memory/SQLite)
 eval "$(scripts/local_postgres.sh start | tail -1)"   # a user-local PostgreSQL (or set TRACE_GUARD_POSTGRES_URL)
 mix test                          # now also runs the real PostgreSQL suite
-scripts/external_postgres_smoke.sh                   # a fresh Phoenix app on PostgreSQL using the Ecto adapter
+scripts/external_postgres_smoke.sh                   # a fresh Phoenix app installs TraceGuard on PostgreSQL and migrates
+scripts/no_ecto_smoke.sh          # a fresh Phoenix app without Ecto (optional dependencies stay optional)
+scripts/package_check.sh          # what the Hex package would contain (builds locally, publishes nothing)
 MIX_ENV=dev mix docs              # HexDocs-style documentation in doc/
 ```
+
+CI (GitHub Actions, `.github/workflows/`) is configured to run these checks
+on every pull request, with real PostgreSQL 16 and 18 services, and a
+weekly workflow for the other toolchain rows and Cowboy. See [docs/compatibility.md](docs/compatibility.md#continuous-integration).
 
 The release procedure is in [docs/release_checklist.md](docs/release_checklist.md),
 the history in [CHANGELOG.md](CHANGELOG.md), and design notes in

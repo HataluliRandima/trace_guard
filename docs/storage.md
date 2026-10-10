@@ -212,6 +212,16 @@ mix trace_guard.gen.ecto_migration          # writes priv/repo/migrations/<ts>_a
 mix ecto.migrate
 ```
 
+The generator resolves things the way `mix ecto.gen.migration` does: the
+Repo from `--repo` (or `-r`) or your `:ecto_repos` (it refuses to guess
+when several are listed, and refuses non-PostgreSQL repos), the directory
+from that Repo's `:priv` setting, and the module name
+`<Repo>.Migrations.AddTraceGuardReports`. The file is already formatted,
+identical on every run apart from its timestamp, and generated only once
+(a second run refuses). The clean-install test
+(`scripts/external_postgres_smoke.sh`) checks all of this in a fresh
+Phoenix application.
+
 The generated migration calls `TraceGuard.Storage.Ecto.Migration.up(version: 1)`
 and `down(version: 1)`. The version is pinned, so a later TraceGuard release
 can't change what an already-run migration does. A future schema change
@@ -257,16 +267,58 @@ would ship as `version: 2`, which you add in a new migration of your own.
 | Repo not started yet | dropped `{:ecto_error, :repo_not_started}`; succeeds once the Repo is up (tested) |
 | Database unreachable, or connections refused | dropped `{:ecto_error, :connection}` (or the PostgreSQL code, for example `:admin_shutdown`); the writer keeps running; writes succeed again when the pool reconnects (tested with `ALLOW_CONNECTIONS false` and terminated backends) |
 | Table missing (migration not run) | dropped `{:ecto_error, :undefined_table}` |
-| Statement timeout | dropped `{:ecto_error, :timeout}` |
+| Statement timeout | dropped `{:ecto_error, :timeout}`, or `:query_canceled` when PostgreSQL cancels it |
+| Table locked (for example by a migration) | the writer waits up to `:write_timeout` per report; queued reports are stored once the lock is released (observed: 49 of 51 after a 12 s lock, 2 cancelled) |
 | Corrupt or incompatible row | `get_report/1` → `{:error, :corrupt}`; `list_reports/1` skips it |
 | Writer killed with queued reports | queued reports become `{:dropped, :lost}`; committed ones remain |
 
 There are no automatic retries: a report that fails is dropped with its
 reason, counted (`report_stats/0`: `write_errors`, `last_error`) and recorded
-for `report_status/1`. The writer logs one warning when writes start failing
+for `report_status/1`.
+
+**During an outage, the writer is slow, not stuck.** Each failed write
+waits for your Repo's pool to give up on a connection (about 4 s per write
+with default pool settings, measured on PostgreSQL 18). So the writer
+drains only a few reports per second, the queue fills, and most reports
+in an outage are refused at admission as `:overloaded`. They would have
+failed anyway, but the reason you see is the queue, not the database. See
+"Overload or outage?" below. Writes succeed again within about a second
+of the database coming back. The writer logs one warning when writes start failing
 and one notice when they recover, with the error code only, never report
 content. PostgreSQL error *messages* are never kept, because they can quote
 row values.
+
+### Overload or outage?
+
+`report_stats/0` tells the two apart:
+
+| Signal | Load beyond the writer | Database problem |
+| --- | --- | --- |
+| `dropped_overloaded` | rising | rising (the queue fills behind slow failures) |
+| `write_errors` | flat | rising |
+| `last_error` | `nil` (or old) | a code: `:connection`, `:admin_shutdown`, `:query_canceled`, ... |
+| `available` | `true` | `false` while reads fail |
+| `writer_busy` | usually `false` | often `true` (the writer is inside a slow statement) |
+| Log | nothing | one warning, `TraceGuard Ecto storage: writes failing (<code>)`, and one notice on recovery |
+
+`[:trace_guard, :report, :dropped]` events carry the same distinction per
+report: `reason: :overloaded` or `reason: {:ecto_error, code}`.
+
+`writer_running: true, writer_busy: true` means the writer is alive but
+didn't answer within a second (it's waiting on the database). `pending` is
+then read from the admission counter. `writer_running: false` means it
+isn't running at all.
+
+### Shutdown
+
+The writer doesn't trap exits, so it stops immediately when your
+application shuts down, even inside a statement. PostgreSQL rolls back an
+interrupted transaction. Reports still queued (at most
+`:max_pending_reports`) are lost. If only the writer restarts, they're
+recorded as `{:dropped, :lost}`; when the whole application stops, there's
+no record left. Shutdown time doesn't depend on the database (observed:
+immediate, with the writer blocked on a locked table and 51 queued
+reports).
 
 ### Troubleshooting
 

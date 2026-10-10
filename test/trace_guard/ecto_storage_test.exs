@@ -161,6 +161,10 @@ defmodule TraceGuard.Storage.EctoTest do
     {admitted, refused} = Enum.split_with(results, fn {_, r} -> r == {:ok, :queued} end)
     assert length(admitted) == 10
 
+    # A writer that doesn't answer (here suspended; in production stuck in a
+    # slow statement) is reported as busy, with its queue, not as down.
+    assert %{writer_running: true, writer_busy: true, pending: 10} = TraceGuard.report_stats()
+
     for {id, _} <- refused do
       assert_receive {:report_event, {:dropped, :overloaded}, ^id}
       assert TraceGuard.report_status(id) == {:dropped, :overloaded}
@@ -168,6 +172,7 @@ defmodule TraceGuard.Storage.EctoTest do
 
     :sys.resume(pid)
     for {id, _} <- admitted, do: assert_receive({:report_event, :stored, ^id}, 5_000)
+    assert %{writer_running: true, writer_busy: false, pending: 0} = TraceGuard.report_stats()
     :telemetry.detach(handler)
   end
 

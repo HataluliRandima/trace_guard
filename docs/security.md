@@ -104,6 +104,25 @@ What TraceGuard captures, what it protects, and what it does **not**.
   `report_status/1`. TraceGuard logs nothing per dropped report, so a
   failure storm can't become a log storm.
 
+## Continuous integration (Phase 7)
+
+* Workflows have `permissions: contents: read` and use no secrets. Nothing
+  in CI can publish, tag or push.
+* Third-party actions are pinned to commit SHAs (the tag is in a comment).
+* PostgreSQL runs as a per-job service container with trust
+  authentication, reachable only from the job's runner. There is no
+  password to commit or leak.
+* Logs that CI keeps on failure (smoke-test and compatibility logs, 7 days)
+  contain only the fake secrets planted by the tests. On a public
+  repository, anyone can read them. Real secrets must never be used in
+  tests.
+* `scripts/package_check.sh` fails the build if the package would contain
+  anything but `lib/**/*.ex` and the five top-level files, secret-like
+  strings, databases or build artefacts.
+* `scripts/local_postgres.sh` verifies the PostgreSQL project's apt
+  repository signature against a pinned key fingerprint, and every package
+  against the signed index, before extracting anything.
+
 ## Configuration validation
 
 Unknown or ill-typed `:trace_guard` options raise at boot. `TraceGuard.Storage.SQLite` rejects unknown or invalid options when it starts.

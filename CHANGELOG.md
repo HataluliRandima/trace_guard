@@ -7,6 +7,34 @@ Before 1.0, minor versions may change the API; changes are listed here.
 
 First release candidate. Not published to Hex.
 
+### Phase 7: CI and release readiness
+
+* GitHub Actions: `ci.yml` runs on pull requests and on pushes to `main` and
+  `phase*`. It covers formatting, warnings-as-errors builds, tests, ExDoc,
+  the package check, the demo, real PostgreSQL 16 and 18, the minimum
+  toolchain, and clean installs. `compat.yml` runs weekly and on demand,
+  for the other toolchain rows and Bandit/Cowboy.
+* **Fixed:** `report_stats/0` with the Ecto adapter reported a writer
+  blocked in a slow statement as `writer_running: false`; it now reports
+  `writer_running: true, writer_busy: true` and the queue length.
+* `mix trace_guard.gen.ecto_migration` resolves the Repo and directory as
+  `mix ecto.gen.migration` does (`--repo`/`-r` or `:ecto_repos`, the
+  Repo's `:priv`). It refuses ambiguous or non-PostgreSQL repos, and is only
+  compiled when Ecto is present.
+* `scripts/compat_matrix.sh` now exits non-zero when a row fails, and checks
+  that the running toolchain is the row's.
+* New scripts: `scripts/package_check.sh` and `scripts/no_ecto_smoke.sh`.
+  `scripts/external_postgres_smoke.sh` now follows the public install steps
+  from the built package. It checks the generated migration (location,
+  module, formatting, determinism, refusing a second copy), rollback, that
+  nothing is created before migrating, and that unrelated tables are left
+  untouched.
+* `scripts/local_postgres.sh` supports other PostgreSQL majors
+  (`PG_MAJOR=18`) from the PostgreSQL apt repository, with verified
+  signatures.
+* Documented: how to tell overload from a database outage, writer shutdown,
+  and outage throughput (`bench/ecto_writer_operations.exs`).
+
 ### Phase 6: Ecto/PostgreSQL storage (experimental)
 
 * `TraceGuard.Storage.Ecto`: stores reports in the application's own
