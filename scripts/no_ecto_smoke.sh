@@ -2,6 +2,8 @@
 # Optional dependencies stay optional: a fresh Phoenix application generated
 # without Ecto (`mix phx.new --no-ecto`) installs the built TraceGuard
 # package, configures nothing but the plug, and gets in-memory reports.
+# TRACE_GUARD_DEP replaces the built package with any dependency options,
+# for example 'github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"'.
 #
 #   scripts/no_ecto_smoke.sh
 #
@@ -25,17 +27,23 @@ trap 'echo; echo "Generated app and logs: $WORK"; exit "$STATUS"' EXIT
 mkdir -p "$WORK"
 
 echo "== A Phoenix app without Ecto, TraceGuard from the built package"
-(cd "$ROOT" && MIX_ENV=dev mix hex.build --unpack -o "$PKG" > "$WORK/hex_build.log" 2>&1) ||
-  die "mix hex.build failed (see $WORK/hex_build.log)"
+if [ -n "${TRACE_GUARD_DEP:-}" ]; then
+  DEP="$TRACE_GUARD_DEP"
+else
+  (cd "$ROOT" && MIX_ENV=dev mix hex.build --unpack -o "$PKG" > "$WORK/hex_build.log" 2>&1) ||
+    die "mix hex.build failed (see $WORK/hex_build.log)"
+  DEP="path: \"$PKG\""
+fi
+echo "   dependency: {:trace_guard, $DEP}"
 (cd "$WORK" && env -u ASDF_ELIXIR_VERSION -u ASDF_ERLANG_VERSION mix phx.new plain_shop --no-install \
   --no-ecto --no-assets --no-html --no-dashboard --no-gettext --no-mailer --no-live \
   --no-agents-md --no-version-check > "$WORK/phx_new.log" 2>&1) || die "phx.new failed (see $WORK/phx_new.log)"
 rm -rf "$APP/.git"
 
-python3 -I - "$APP/mix.exs" "$PKG" "$APP/lib/plain_shop_web/endpoint.ex" "$APP/lib/plain_shop_web/router.ex" <<'PY'
+python3 -I - "$APP/mix.exs" "$DEP" "$APP/lib/plain_shop_web/endpoint.ex" "$APP/lib/plain_shop_web/router.ex" <<'PY'
 import sys
-mix, pkg, endpoint, router = sys.argv[1:5]
-s = open(mix).read(); s = s.replace('{:bandit, "~> 1.5"}', '{:bandit, "~> 1.5"},\n      {:trace_guard, path: "%s"}' % pkg); open(mix, "w").write(s)
+mix, dep, endpoint, router = sys.argv[1:5]
+s = open(mix).read(); s = s.replace('{:bandit, "~> 1.5"}', '{:bandit, "~> 1.5"},\n      {:trace_guard, %s}' % dep); open(mix, "w").write(s)
 s = open(endpoint).read(); s = s.replace("  plug Plug.RequestId\n", "  plug Plug.RequestId\n  plug TraceGuard.Plug\n", 1); open(endpoint, "w").write(s)
 s = open(router).read(); s = s.replace("    pipe_through :api\n", '    pipe_through :api\n\n    get "/fail", FailController, :show\n', 1); open(router, "w").write(s)
 PY

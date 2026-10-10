@@ -143,6 +143,27 @@ fully connected when the test closes the database, so no connection is
 being established in that window. Without knowing the test, a regression
 test would be guesswork, so none was added.
 
+**Phase 8 follow-up: a likely cause, found with full logs.** During the
+Phase 8 verification, the "current" compatibility row (PostgreSQL 16.15)
+failed once, and this time the whole log was kept:
+
+* test: `TraceGuard.DropLogTest` "concurrent writers never exceed the
+  bound", seed 948165;
+* failed assertion: `DropLog.sizes().drop_records >= 45`; actual: 41.
+
+It's not a PostgreSQL test. DropLog's racing evictions can leave fewer
+records than the bound under concurrency, which its documentation already
+allowed. The test's lower bound of 45 was simply too strict. Measured
+over 200 bursts each, the final count ranged 44–50 on an idle machine and
+43–50 under full CPU load, below 45 about once in 200, and never above 50.
+Fixed in the test, which now asserts the real guarantee (never above the
+bound) and, deterministically, that eviction catches up oldest-first. It
+passed 300 repetitions.
+
+This test matches every surviving fact about the PostgreSQL 18 failure: a
+fast assertion, no server-side anomaly, and rare. So it is the most likely
+cause, **but that is an inference, not a proof**.
+
 Lesson applied: CI keeps the complete job log (and the PostgreSQL jobs
 `tee` the full output), so a recurrence there will name the test and its
 seed. Locally, keep full logs (`mix test 2>&1 | tee run.log`), never only a
@@ -279,6 +300,20 @@ avoided anyway, so it doesn't justify changing the writer.
    * sustained load.
 6. **No production use.** The Ecto adapter, `TraceGuard.Server` and the
    storage behaviour remain **experimental**.
+
+## After Phase 7 (Phase 8, release preparation)
+
+* **Distribution chosen:** an experimental GitHub pre-release from the tag
+  `v0.1.0-rc.1`, installed with
+  `{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"}`.
+  Hex is not part of rc.1.
+* **CI policy:** required CI now pins `postgres:16.15` and `postgres:18.6`,
+  and `mix hex.audit` moved to the weekly Compatibility workflow, which
+  keeps the floating major tags.
+* The release gate is section 0 of
+  [release_checklist.md](release_checklist.md). The runs above tested
+  `882fc9a` only. The release commit needs its own green CI and
+  Compatibility runs before it's tagged.
 
 ## Recommendation
 

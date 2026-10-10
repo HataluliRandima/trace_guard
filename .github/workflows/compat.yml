@@ -1,6 +1,12 @@
 # Broader compatibility checks, too slow for every pull request: the other
 # rows of scripts/compat_matrix.sh (fresh dependency resolution, real
-# PostgreSQL) and the external Phoenix smoke test with Bandit and Cowboy.
+# PostgreSQL) and the external Phoenix smoke test with Bandit and Cowboy,
+# plus the retired-package audit.
+#
+# Policy: this workflow is the early warning, so it floats on purpose:
+# PostgreSQL major tags (the latest 16.x and 18.x), fresh dependency
+# resolution. Red here while ci.yml is green means something changed
+# upstream: fix it or tighten a constraint, then bump ci.yml's pins.
 # Weekly on the default branch, and on demand (Actions -> Compatibility ->
 # Run workflow), for example before a release.
 name: Compatibility
@@ -63,6 +69,22 @@ jobs:
           name: compat-${{ matrix.row }}-logs
           path: ${{ runner.temp }}/compat/*.log
           retention-days: 7
+
+  audit:
+    name: Retired Hex packages (mix hex.audit, locked dependencies)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "26.1.2"
+          elixir-version: "1.17.0"
+          version-type: strict
+      - name: Dependencies (the lock file must be current)
+        run: mix deps.get --check-locked
+      - name: No retired dependencies
+        run: mix hex.audit
 
   external:
     name: Fresh Phoenix app, Bandit and Cowboy x memory and SQLite (Elixir 1.17.1 / OTP 27.0)

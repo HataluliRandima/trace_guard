@@ -5,14 +5,14 @@ through investigating a failed request.
 
 ## 1. Add the dependency
 
-TraceGuard is not on Hex yet:
+TraceGuard 0.1.0-rc.1 is an experimental preview, installed from its Git
+tag (it isn't on Hex):
 
 ```elixir
 # mix.exs
 defp deps do
   [
-    {:trace_guard, path: "../trace_guard"}
-    # or: {:trace_guard, git: "<repository url>"}
+    {:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"}
   ]
 end
 ```

@@ -101,8 +101,16 @@ defmodule TraceGuard.DropLogTest do
     |> Task.async_stream(fn _ -> DropLog.record_drop(id(), :overloaded) end, max_concurrency: 64)
     |> Stream.run()
 
+    # The guarantee is the upper bound. Racing evictions can leave fewer
+    # records (by up to the number of concurrent writers; 41 to 50 have
+    # been observed), so there's no fixed lower bound to assert here.
     assert DropLog.sizes().drop_records <= 50
-    assert DropLog.sizes().drop_records >= 45
+
+    # Afterwards, eviction catches up and stays oldest-first: 50 sequential
+    # drops leave exactly those 50 records.
+    latest = for _ <- 1..50, do: tap(id(), &DropLog.record_drop(&1, :overloaded))
+    assert DropLog.sizes().drop_records == 50
+    for i <- latest, do: assert(DropLog.lookup(i) == {:dropped, :overloaded})
   end
 
   test "an expired record means unknown, and the sweep removes it" do

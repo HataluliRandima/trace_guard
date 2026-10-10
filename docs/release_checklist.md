@@ -4,24 +4,26 @@ Steps for cutting a TraceGuard release. **Publishing is a manual, human
 step.** Nothing in this repository publishes automatically, and no CI
 workflow has publishing credentials.
 
-## 0. External preview gate (0.1.0-rc.1)
+## 0. Release gate for 0.1.0-rc.1 (experimental GitHub pre-release)
 
-Every box must be ticked, with evidence (a link or a log), before the
-release candidate is announced as an external preview. Status as of the
-Phase 7 review ([phase7_review.md](phase7_review.md)):
+Distribution: a Git tag `v0.1.0-rc.1` and a GitHub pre-release. **Not
+Hex.** Every box must be ticked, with evidence, **for the commit that will
+be tagged**. A run on an earlier commit doesn't count for a later one.
+Status at the end of Phase 8 (the release commit isn't made yet):
 
 | # | Item | Evidence required | Status |
 | --- | --- | --- | --- |
-| 1 | **CI green** | a passing `CI` run on GitHub for the commit to release: library checks, demo, minimum toolchain | ☑ [run 38040243638](https://github.com/HataluliRandima/trace_guard/actions/runs/38040243638) (`882fc9a`); re-check for the commit you tag |
-| 2 | **Real PostgreSQL CI green** | the `PostgreSQL 16` and `PostgreSQL 18` jobs of that run, with no excluded tests | ☑ same run: both jobs succeeded (their step fails on any exclusion or a wrong server version) |
-| 3 | **Clean migration workflow verified** | the `Clean install` job of that run | ☑ same run (PostgreSQL 16); also passes locally on 18 |
-| 4 | **Compatibility workflow green** | one manual run of `Compatibility` (Actions → Compatibility → Run workflow) | ☑ [run 38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035) (`882fc9a`, manual): all four jobs succeeded |
-| 5 | **Supported toolchain documented** | [compatibility.md](compatibility.md) matches the CI matrix | ☑ |
-| 6 | **Security limitations disclosed** | [security.md](security.md): logs aren't sanitized, PostgreSQL deletion is logical, SQLite caveats | ☑ |
-| 7 | **Experimental API boundaries clear** | ExDoc groups; `TraceGuard.Server`, `TraceGuard.Storage` and its adapters, the migration and its task are labelled experimental | ☑ (CI passing doesn't make them stable) |
-| 8 | **Git history and integration plan agreed** | the maintainer has decided how Phase 7 reaches `main` (see phase7_review.md) | ☑ Phase 7 is on `main` (`882fc9a`); future work through pull requests |
-| 9 | **Release notes ready** | `CHANGELOG.md` entry; an announcement that says "experimental preview" and lists the limits | ☐ changelog done; announcement not written |
-| 10 | **Tag exists** | `v0.1.0-rc.1` points at the released commit (ExDoc's source links use it) | ☐ maintainer action, step 10 |
+| 1 | **CI green on the release commit** | a passing `CI` run whose commit is the one to tag | ☐ the release commit doesn't exist yet. Earlier runs: [38040243638](https://github.com/HataluliRandima/trace_guard/actions/runs/38040243638) on `882fc9a` (passed) |
+| 2 | **Real PostgreSQL CI green** | the `PostgreSQL 16.15` and `PostgreSQL 18.6` jobs of that run | ☐ with item 1 |
+| 3 | **Clean install green** | the `Clean install` job of that run | ☐ with item 1 |
+| 4 | **Compatibility green on the release commit** | a manual `Compatibility` run on that commit (the workflow itself changed in Phase 8) | ☐ earlier: [38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035) on `882fc9a` (passed) |
+| 5 | **Git-tag installation verified** | a fresh Phoenix app installs `{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"}` | ☐ locally ✅: a scratch tag behind a Git URL redirect, so the documented line ran unchanged (memory without Ecto, and the Ecto adapter with migration). Against GitHub: needs the real tag (step 9) |
+| 6 | **Supported toolchain documented** | [compatibility.md](compatibility.md) matches the CI matrix | ☑ |
+| 7 | **Security limitations disclosed** | [security.md](security.md): logs aren't sanitized, unlabelled secrets, PostgreSQL deletion is logical, reports can be dropped | ☑ |
+| 8 | **Experimental API boundaries clear** | ExDoc groups and module docs | ☑ (CI passing doesn't make them stable) |
+| 9 | **Release notes ready** | the `CHANGELOG.md` entry and the announcement draft (`docs/announcements/v0.1.0-rc.1.md`) | ☐ drafted; maintainer review |
+| 10 | **Tag exists** | `v0.1.0-rc.1` points at the release commit (ExDoc's source links use it) | ☐ maintainer action |
+| 11 | **Pre-release published** | a GitHub release, marked pre-release, from that tag | ☐ maintainer action |
 
 ## 1. Clean state
 
@@ -42,7 +44,7 @@ mix test                           # expect 0 failures
 
 ## 2b. Real PostgreSQL suite (Ecto adapter)
 
-In CI: the `PostgreSQL 16`, `PostgreSQL 18` and `Clean install` jobs.
+In CI: the `PostgreSQL 16.15`, `PostgreSQL 18.6` and `Clean install` jobs.
 Locally, for each major version:
 
 ```bash
@@ -130,17 +132,44 @@ and tests aren't packaged).
 * `CHANGELOG.md` has an entry for it.
 * `docs/compatibility.md` and the README's status line are current.
 
-## 9. Package name
+## 9. Release (GitHub pre-release; maintainer only)
 
-* `curl -s -o /dev/null -w "%{http_code}" https://hex.pm/api/packages/trace_guard`
-  returns `404` while the name is unclaimed. (It returned 404 on 2026-10-10.)
-
-## 10. Publish (manual, outside this checklist's automation)
-
-Only after every step above passes, and only by a maintainer with Hex
-credentials:
+Only after every step above passes, **and** CI and Compatibility are green
+on GitHub for the commit to tag:
 
 ```bash
-git tag v<version> && git push origin v<version>
-mix hex.publish                    # interactive; asks for confirmation
+git switch main && git pull --ff-only
+git status --short                          # expect no output
+git log --oneline -1                        # the commit CI and Compatibility passed on
+git tag -a v0.1.0-rc.1 -m "TraceGuard 0.1.0-rc.1 (experimental preview)"
+git push origin v0.1.0-rc.1
 ```
+
+Then verify the published tag from a clean machine or directory (this is
+the one check that can't run before the tag exists):
+
+```bash
+TRACE_GUARD_DEP='github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"' scripts/no_ecto_smoke.sh
+TRACE_GUARD_DEP='github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"' \
+  TRACE_GUARD_POSTGRES_URL=... scripts/external_postgres_smoke.sh
+```
+
+Then, on GitHub: Releases → Draft a new release → choose tag
+`v0.1.0-rc.1` → title "TraceGuard 0.1.0-rc.1 (experimental preview)" →
+paste the announcement → tick **Set as a pre-release** → Publish.
+
+A tag is easy to create and awkward to retract once people have fetched it.
+If something is wrong after tagging, release `v0.1.0-rc.2` rather than
+moving the tag.
+
+## 10. Hex (not part of 0.1.0-rc.1)
+
+Publishing to Hex is a separate, later decision. It permanently claims the
+package name, and a version can only be reverted briefly. When it comes:
+
+* `scripts/package_check.sh` passes (it already runs in CI).
+* `curl -s -o /dev/null -w "%{http_code}" https://hex.pm/api/packages/trace_guard`
+  returns `404` while the name is unclaimed. (It returned 404 on
+  2026-10-10.)
+* A maintainer with a Hex account and 2FA runs `mix hex.publish` from the
+  tagged checkout.

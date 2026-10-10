@@ -3,9 +3,34 @@
 All notable changes. TraceGuard follows [Semantic Versioning](https://semver.org/).
 Before 1.0, minor versions may change the API; changes are listed here.
 
-## 0.1.0-rc.1 (unreleased release candidate)
+## 0.1.0-rc.1: experimental preview (GitHub pre-release)
 
-First release candidate. Not published to Hex.
+First release candidate, distributed as a GitHub pre-release from the tag
+`v0.1.0-rc.1`. It is **not published to Hex**. Install it with
+`{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"}`.
+
+This is an early, experimental preview, not a stability guarantee.
+`TraceGuard.Server`, `TraceGuard.Storage` and its adapters (SQLite and
+Ecto/PostgreSQL), and the migration module and task are experimental and
+may change before 1.0.
+
+### Phase 8: release preparation
+
+* Installation from the Git tag, documented and tested in fresh Phoenix
+  apps (memory storage without Ecto, and the Ecto adapter with a generated
+  migration). The clean-install scripts accept `TRACE_GUARD_DEP`.
+* CI policy: required CI pins PostgreSQL to exact minor versions (16.15,
+  18.6). The weekly Compatibility workflow keeps the floating major tags
+  and now runs `mix hex.audit`, which was removed from required CI.
+* README: a storage table (memory, SQLite, Ecto/PostgreSQL), dropped
+  reports, and the status of this preview.
+* A draft announcement: `docs/announcements/v0.1.0-rc.1.md`.
+* **Fixed (test):** `DropLogTest` "concurrent writers never exceed the
+  bound" asserted a lower bound (at least 45 of 50 records) that concurrent
+  eviction doesn't guarantee. It failed about once in 200 bursts. It now
+  asserts the upper bound and deterministic oldest-first recovery.
+  DropLog's documentation states the possible dip precisely. This was the
+  likely cause of the unexplained Phase 7 failure.
 
 ### Phase 7: CI and release readiness
 

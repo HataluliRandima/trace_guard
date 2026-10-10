@@ -1,6 +1,14 @@
 # Pull-request and branch CI. Every job must pass; nothing here uses
 # continue-on-error. Slower, broader compatibility checks live in
 # compat.yml (weekly and on demand). See docs/compatibility.md.
+#
+# Policy: this workflow is the gate, so its inputs are pinned (exact
+# toolchains, action SHAs, mix.lock, exact PostgreSQL minor versions) and it
+# should only change result when the code changes. Upstream drift (new
+# PostgreSQL minors, freshly resolved dependencies, retired Hex packages) is
+# caught by compat.yml. The clean-install job is the deliberate exception:
+# its generated application resolves dependencies fresh, as a new user's
+# would.
 name: CI
 
 on:
@@ -62,8 +70,8 @@ jobs:
         run: MIX_ENV=dev mix docs --warnings-as-errors
       - name: Package contents and metadata (local build; nothing is published)
         run: scripts/package_check.sh
-      - name: No retired dependencies
-        run: mix hex.audit
+      # `mix hex.audit` (retired packages) runs weekly in compat.yml: a
+      # retirement upstream shouldn't fail unrelated pull requests.
 
   demo:
     name: Demo application
@@ -105,7 +113,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        postgres: ["16", "18"]
+        # Exact minors, bumped deliberately (compat.yml follows the latest).
+        postgres: ["16.15", "18.6"]
     services:
       postgres:
         image: postgres:${{ matrix.postgres }}
@@ -143,8 +152,8 @@ jobs:
       - name: Full suite with the real PostgreSQL tests (fails if any are excluded)
         run: |
           mix test 2>&1 | tee "$RUNNER_TEMP/test.log"
-          # The suite ran against the intended server version.
-          grep "^PostgreSQL suite: enabled, PostgreSQL $EXPECTED_POSTGRES\." "$RUNNER_TEMP/test.log"
+          # The suite ran against exactly the intended server version.
+          grep "^PostgreSQL suite: enabled, PostgreSQL $EXPECTED_POSTGRES " "$RUNNER_TEMP/test.log"
           if grep -E "[0-9]+ excluded" "$RUNNER_TEMP/test.log"; then
             echo "::error::PostgreSQL tests were excluded"
             exit 1
@@ -156,7 +165,7 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
@@ -193,7 +202,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:

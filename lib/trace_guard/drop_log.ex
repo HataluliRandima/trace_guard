@@ -24,8 +24,10 @@ defmodule TraceGuard.DropLog do
   ## Bounds and expiry
 
   * At most `:max_drop_records` drop records (default 1000). The oldest is
-    evicted first. Under concurrent writers the count can briefly fall a
-    little below the limit, never above it for longer than one insert.
+    evicted first. Under concurrent writers, racing evictions can leave the
+    count below the limit, by up to the number of concurrent writers (41 of
+    50 has been observed with 64 writers). It is never above the limit for
+    longer than one insert.
   * A drop record expires after `:drop_record_ttl` ms (default 600_000),
     measured with the monotonic clock. Expired records are treated as absent
     on lookup and removed by a periodic sweep.
