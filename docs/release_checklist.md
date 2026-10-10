@@ -20,6 +20,19 @@ MIX_ENV=test mix compile --warnings-as-errors
 mix test                           # expect 0 failures
 ```
 
+## 2b. Real PostgreSQL suite (Ecto adapter)
+
+```bash
+eval "$(scripts/local_postgres.sh start | tail -1)"   # or point TRACE_GUARD_POSTGRES_URL at any PostgreSQL
+mix test                           # must report 0 failures and **no** excluded :postgres tests
+scripts/external_postgres_smoke.sh # fresh Phoenix app on PostgreSQL: must end with exit 0
+scripts/local_postgres.sh stop
+```
+
+Without `TRACE_GUARD_POSTGRES_URL`, `mix test` excludes the PostgreSQL
+suite and says so ("N excluded"). Such a run does **not** verify the Ecto
+adapter.
+
 ## 3. Demo checks
 
 ```bash
@@ -35,7 +48,7 @@ cd ..
 ## 4. Compatibility matrix
 
 ```bash
-scripts/compat_matrix.sh           # needs asdf with the listed toolchains
+TRACE_GUARD_POSTGRES_URL=... scripts/compat_matrix.sh   # needs asdf with the listed toolchains
 ```
 
 Every row must show `ok | ok` and 0 failures. Update

@@ -67,7 +67,17 @@ defmodule TraceGuard.Storage do
   @callback clear(keyword()) :: :ok | {:error, :unavailable}
   @callback stats(keyword()) :: map()
 
-  @optional_callbacks child_spec: 1
+  @doc """
+  Optional (Phase 6): summaries matching every `{field, value}` criterion
+  exactly (fields are summary keys such as `"incoming_id"`), newest first.
+  Lets an adapter filter in its database instead of returning every summary.
+  The facade re-applies the criteria to whatever is returned, so an adapter
+  can narrow results but never widen them.
+  """
+  @callback list_matching([{String.t(), term()}], keyword()) ::
+              [summary()] | {:error, :unavailable}
+
+  @optional_callbacks child_spec: 1, list_matching: 2
 
   @counters [:submitted, :accepted, :stored, :dropped_overloaded, :dropped_other, :lost]
   @counters_key {__MODULE__, :counters}
@@ -128,6 +138,30 @@ defmodule TraceGuard.Storage do
   @doc "Lists report summaries from the configured adapter, newest first."
   @spec list() :: [summary()] | {:error, :unavailable}
   def list, do: safely(:list, [], {:error, :unavailable})
+
+  @doc """
+  Summaries matching all `{field, value}` criteria exactly, newest first.
+  Uses the adapter's `c:list_matching/2` when it has one, else `c:list/1`.
+  """
+  @spec list_matching([{String.t(), term()}]) :: [summary()] | {:error, :unavailable}
+  def list_matching(criteria) do
+    {adapter, _opts} = adapter()
+
+    result =
+      if criteria != [] and function_exported?(adapter, :list_matching, 2),
+        do: safely(:list_matching, [criteria], {:error, :unavailable}),
+        else: list()
+
+    case result do
+      summaries when is_list(summaries) ->
+        Enum.filter(summaries, fn summary ->
+          Enum.all?(criteria, fn {field, value} -> summary[field] == value end)
+        end)
+
+      error ->
+        error
+    end
+  end
 
   @doc "Deletes one report."
   @spec delete(String.t()) :: :ok | {:error, :unavailable}

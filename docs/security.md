@@ -84,6 +84,20 @@ What TraceGuard captures, what it protects, and what it does **not**.
   * there is no encryption at rest, so treat the file as sensitive
     diagnostic data, and keep it out of version control and backups you
     share.
+* **The Ecto/PostgreSQL adapter** (Phase 6):
+  * stores only the redacted report and summary (`jsonb`), plus filter
+    columns copied from that summary. A test scans every column of every row
+    for planted secrets after a real failing request;
+  * the table lives in your database: its access control, encryption at rest,
+    backups and replication are yours;
+  * deletion is logical. Old row versions remain until `VACUUM`, and
+    deleted data can persist in WAL, replicas, backups and PITR archives.
+    TraceGuard can't erase it there;
+  * TraceGuard's queries are sent with `log: false` and
+    `telemetry_event: nil`, so report contents don't reach your Ecto query
+    logs or telemetry handlers;
+  * PostgreSQL error messages (which can quote values) are never stored or
+    logged, only error codes.
 * **Storage failures** (overload, adapter errors, a locked or missing
   database) never change the application's response or exception. They are
   counted, emitted as `[:trace_guard, :report, :dropped]`, and recorded for

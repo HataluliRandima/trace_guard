@@ -23,4 +23,12 @@ TraceGuard.Telemetry.attach()
     name: TraceGuard.TestSupervisor
   )
 
-ExUnit.start()
+# Real PostgreSQL suite (TraceGuard.Storage.Ecto): runs only when a server
+# is provided, e.g. TRACE_GUARD_POSTGRES_URL=postgres://postgres@127.0.0.1:54329
+if TraceGuard.PostgresSupport.url() do
+  TraceGuard.PostgresSupport.setup!()
+  ExUnit.after_suite(fn _ -> TraceGuard.PostgresSupport.teardown!() end)
+  ExUnit.start()
+else
+  ExUnit.start(exclude: [:postgres])
+end

@@ -48,6 +48,39 @@ Their within-run drift was as large as the effect.
 I/O, production hardware, releases, multiple nodes, and long-running memory
 behaviour.
 
+## Phase 6: Ecto/PostgreSQL adapter costs
+
+Measured with `bench/ecto_storage_costs.exs` against PostgreSQL 16.15 on the
+same laptop (local TCP; plain `:timer.tc`; a 20-event report). There were two
+runs, and they agree; the second is in
+[`bench/results/phase6-ecto-costs.md`](https://github.com/HataluliRandima/trace_guard/blob/main/bench/results/phase6-ecto-costs.md).
+
+| Measurement | Median (run 1 / 2) | p99 (run 1 / 2) |
+| --- | --: | --: |
+| Request side: `Storage.put/1` (admission, pending mark, send) | 4 / 3 µs | 288 / 251 µs |
+| Writer: submit until committed (`:stored`) | 5.6 / 5.5 ms | 13.4 / 15.9 ms |
+| `get_report/1` (1,000 rows) | 0.60 / 0.58 ms | 1.4 / 1.2 ms |
+| `report_status/1` | 0.55 / 0.60 ms | 1.3 / 1.5 ms |
+| `list_reports(trace_id: ...)` (index) | 0.53 / 0.46 ms | 1.1 / 1.2 ms |
+| `list_reports()` (1,000 summaries) | 7.5 / 9.8 ms | 16.5 / 16.0 ms |
+
+Observations:
+
+* **The request path is unaffected** by database latency: only admission
+  runs there (a few microseconds).
+* **Writer throughput is the limit:** about 5.5 ms per report means roughly
+  180 reports per second from the single writer on this machine, dominated
+  by the commit (one transaction per report). Faster bursts are refused at
+  `max_pending_reports` and recorded as `{:dropped, :overloaded}`, never
+  queued without bound. Batching writes, or `SET LOCAL synchronous_commit TO
+  OFF` for these diagnostic writes, could raise this. Neither is implemented,
+  and both trade durability or simplicity.
+* **Reads** are a pool round trip (about 0.5 ms). Unfiltered listing is
+  bounded by `max_reports`.
+* WSL2 disk and fsync characteristics dominate the commit time; a server
+  with different storage will differ. Not measured: remote databases,
+  contended pools, large tables (beyond 1,000 rows).
+
 ## How to run
 
 ```bash

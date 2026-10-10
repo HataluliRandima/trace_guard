@@ -38,6 +38,10 @@ defmodule TraceGuard.MixProject do
       {:jason, "~> 1.4"},
       # Optional: only for TraceGuard.Storage.SQLite (persistent reports).
       {:exqlite, "~> 0.42", optional: true},
+      # Optional: only for TraceGuard.Storage.Ecto (the application's own
+      # PostgreSQL Repo). Postgrex itself comes from the application.
+      {:ecto_sql, "~> 3.10", optional: true},
+      {:postgrex, ">= 0.17.0", only: :test},
       # Only used to exercise the real Phoenix error-handling lifecycle in tests.
       {:phoenix, "~> 1.7", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
@@ -78,7 +82,8 @@ defmodule TraceGuard.MixProject do
         "docs/phase2_review.md",
         "docs/phase3_review.md",
         "docs/phase4_review.md",
-        "docs/phase5_review.md"
+        "docs/phase5_review.md",
+        "docs/phase6_review.md"
       ],
       groups_for_extras: [
         Guides: [
@@ -99,7 +104,8 @@ defmodule TraceGuard.MixProject do
           "docs/phase2_review.md",
           "docs/phase3_review.md",
           "docs/phase4_review.md",
-          "docs/phase5_review.md"
+          "docs/phase5_review.md",
+          "docs/phase6_review.md"
         ]
       ],
       groups_for_modules: [
@@ -108,7 +114,10 @@ defmodule TraceGuard.MixProject do
           TraceGuard.Server,
           TraceGuard.Storage,
           TraceGuard.ReportStore,
-          TraceGuard.Storage.SQLite
+          TraceGuard.Storage.SQLite,
+          TraceGuard.Storage.Ecto,
+          TraceGuard.Storage.Ecto.Migration,
+          Mix.Tasks.TraceGuard.Gen.EctoMigration
         ],
         "Internals (not public API)": [
           TraceGuard.Config,

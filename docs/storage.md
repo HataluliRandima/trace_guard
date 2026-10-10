@@ -15,6 +15,21 @@ TraceGuard.Storage.put/1 ──► ReportStore.put/2
            + [:trace_guard, :report, :dropped]    + [:trace_guard, :report, :stored]
 ```
 
+## Which storage?
+
+| | In memory (default) | SQLite | Ecto / PostgreSQL |
+| --- | --- | --- | --- |
+| Module | `TraceGuard.ReportStore` | `TraceGuard.Storage.SQLite` | `TraceGuard.Storage.Ecto` |
+| Survives restarts | no | yes | yes |
+| Extra dependency | none | `exqlite ~> 0.42` | your app's `ecto_sql ~> 3.10` + `postgrex` |
+| Database | none | its own file | **your app's existing database and Repo** |
+| Intended for | development, production debugging with no persistence | local development and testing | apps that already use PostgreSQL through Ecto |
+| Status | stable | experimental | experimental (Phase 6) |
+
+All three sit behind the same bounded admission queue, the same explicit
+drop outcomes and the same `report_status/1` semantics. Reports reach every
+adapter already redacted.
+
 ## Overload policy (default `TraceGuard.ReportStore`)
 
 | Bound | Default | Mechanism |
@@ -151,6 +166,130 @@ Rules:
 * **Restarts.** If `DropLog` itself restarts, its records are gone, and
   traces read as `:unknown`.
 
+## The Ecto/PostgreSQL adapter (Phase 6, experimental)
+
+`TraceGuard.Storage.Ecto` stores reports in a table in **your application's
+PostgreSQL database, through your application's Ecto Repo**. TraceGuard
+creates no Repo, no connection pool and no database of its own (the external
+PostgreSQL test checks both: `Ecto.Repo.all_running()` is just the app's
+Repo, and no database other than the app's exists).
+
+### Install
+
+Your application already has `ecto_sql` and `postgrex`. TraceGuard declares
+`ecto_sql ~> 3.10` as an **optional** dependency, so applications without
+Ecto pull in nothing. The adapter module is compiled only when Ecto SQL is
+present. If you add Ecto to a project that already compiled TraceGuard, run
+`mix deps.compile trace_guard --force`.
+
+### Configure
+
+```elixir
+# config/config.exs
+config :trace_guard,
+  storage: {TraceGuard.Storage.Ecto, repo: MyApp.Repo, max_age: :timer.hours(24 * 7)}
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `:repo` | required | Your `Ecto.Repo`. It must use `Ecto.Adapters.Postgres`; anything else is refused at start. |
+| `:prefix` | Repo default | PostgreSQL schema of the table (same as the migration's `:prefix`). |
+| `:max_reports` | the `:max_reports` config | Rows kept; the oldest are deleted in each insert's transaction. |
+| `:max_age` | none | Rows older than this (ms, database clock) are deleted by cleanup. |
+| `:cleanup_interval` | 60000 | Periodic cleanup (ms). `TraceGuard.Storage.Ecto.cleanup/1` runs it on demand. |
+| `:write_timeout` | 5000 | Per-statement timeout for the writer (ms). |
+| `:call_timeout` | 5000 | Default read timeout (ms). |
+
+Unknown or invalid options raise `ArgumentError` at start.
+
+### Migrate (your migration, your workflow)
+
+TraceGuard never creates or alters tables by itself, and never migrates at
+startup.
+
+```bash
+mix trace_guard.gen.ecto_migration          # writes priv/repo/migrations/<ts>_add_trace_guard_reports.exs
+mix ecto.migrate
+```
+
+The generated migration calls `TraceGuard.Storage.Ecto.Migration.up(version: 1)`
+and `down(version: 1)`. The version is pinned, so a later TraceGuard release
+can't change what an already-run migration does. A future schema change
+would ship as `version: 2`, which you add in a new migration of your own.
+
+* **Ordering:** run the migration before (or in the same deploy as) enabling
+  the adapter. If the adapter runs before the table exists, writes are
+  dropped with `{:ecto_error, :undefined_table}`, reads return
+  `{:error, :unavailable}`, and requests are unaffected.
+* **Rollback:** `down` drops the table and every stored report. Switch
+  TraceGuard to another adapter first.
+* **Ownership:** the table belongs to your database and your migration
+  history. Its definition is in `TraceGuard.Storage.Ecto.Migration`:
+  * the `jsonb` redacted report and summary;
+  * plain columns for the `list_reports/1` filters (`trace_id` unique,
+    `incoming_id`, `request_id`, `(route, status)` indexed);
+  * `inserted_at`, indexed, for age retention.
+
+### How it uses your Repo
+
+* **Request path:** admission (one `:atomics` add against
+  `:max_pending_reports`) and a `send/2` to the writer. No database work.
+* **Writer:** one process, started by TraceGuard at boot. It never queries
+  in `init`, so it starts fine before your Repo or while the database is
+  down. It uses at most one pool connection at a time. Each report is one
+  transaction: upsert by `trace_id`, then delete rows beyond `:max_reports`.
+  It is announced as stored after the commit.
+* **Reads** (`get_report/1`, `list_reports/1`, `report_status/1`, ...) run
+  in the caller through your pool. `list_reports/1` filters are pushed into
+  SQL (the optional `list_matching/2` callback) and use the indexes.
+* **Quiet:** every statement passes `log: false` and `telemetry_event: nil`.
+  TraceGuard's own queries don't appear in your Ecto logs or telemetry, and
+  are never traced.
+* **Tests with the SQL sandbox:** use shared mode (or allow the writer,
+  `Process.whereis(TraceGuard.Storage.Ecto)`), as for any process that
+  queries.
+
+### Failures and recovery
+
+| Situation | Outcome |
+| --- | --- |
+| Writer queue full | `{:error, :overloaded}` at admission; `report_status/1` → `{:dropped, :overloaded}` |
+| Repo not started yet | dropped `{:ecto_error, :repo_not_started}`; succeeds once the Repo is up (tested) |
+| Database unreachable, or connections refused | dropped `{:ecto_error, :connection}` (or the PostgreSQL code, for example `:admin_shutdown`); the writer keeps running; writes succeed again when the pool reconnects (tested with `ALLOW_CONNECTIONS false` and terminated backends) |
+| Table missing (migration not run) | dropped `{:ecto_error, :undefined_table}` |
+| Statement timeout | dropped `{:ecto_error, :timeout}` |
+| Corrupt or incompatible row | `get_report/1` → `{:error, :corrupt}`; `list_reports/1` skips it |
+| Writer killed with queued reports | queued reports become `{:dropped, :lost}`; committed ones remain |
+
+There are no automatic retries: a report that fails is dropped with its
+reason, counted (`report_stats/0`: `write_errors`, `last_error`) and recorded
+for `report_status/1`. The writer logs one warning when writes start failing
+and one notice when they recover, with the error code only, never report
+content. PostgreSQL error *messages* are never kept, because they can quote
+row values.
+
+### Troubleshooting
+
+* **`report_stats()` shows `available: false`:** the Repo isn't running, the
+  database is unreachable, or the table is missing. Check
+  `report_stats().last_error`.
+* **`last_error: :undefined_table`:** run the migration, or check that
+  `:prefix` matches the migration's.
+* **Reports missing in tests:** the SQL sandbox is in manual mode, and the
+  writer has no connection. Use shared mode.
+* **Pool pressure:** the writer holds one connection per write. A burst of
+  failures is limited by `:max_pending_reports`, not by pool size.
+
+### Deleted data in PostgreSQL
+
+Retention, `delete_report/1` and `clear_reports/0` are ordinary `DELETE`s.
+PostgreSQL keeps old row versions until `VACUUM` reclaims the space.
+Deleted data can also persist in WAL segments, streaming replicas, base
+backups and point-in-time-recovery archives, for as long as those are kept.
+**TraceGuard can't erase it from any of those.** Use your database's own
+retention and backup policies. The stored reports are redacted, but they
+still describe your application's failures.
+
 ## The SQLite adapter (persistent, Phase 4)
 
 `TraceGuard.Storage.SQLite` keeps reports in a SQLite file, so they survive
@@ -247,6 +386,7 @@ config :trace_guard, storage: {MyAdapter, max: 100}            # module or {modu
 | `child_spec(opts)` (optional) | If exported, TraceGuard supervises the adapter configured **at boot**. |
 | `put(report, opts)` | Receives the final, **already redacted** report. Must not block for long and must not raise on overload. Returns `{:ok, :stored}` (retained now), `{:ok, :queued}` (accepted; the adapter then calls `TraceGuard.Storage.stored/1` or `dropped/2`), `{:error, :overloaded}` or `{:error, reason}`. Returning `{:ok, _}` for a refused report is a contract violation. |
 | `get(trace_id, opts)` | `{:ok, report}`, `:error`, `{:error, :unavailable}` or (Phase 4) `{:error, :corrupt}`. Honors `opts[:timeout]`. Never exits. |
+| `list_matching(criteria, opts)` (optional, Phase 6) | Summaries matching every `{field, value}` exactly, newest first. |
 | `list(opts)` | Summaries (`TraceGuard.Storage.summary/1`), newest first, or `{:error, :unavailable}`. |
 | `delete(trace_id, opts)`, `clear(opts)` | `:ok` or `{:error, :unavailable}`. |
 | `stats(opts)` | A map that includes `:adapter`. |
@@ -259,14 +399,22 @@ context is removed before `put` runs, anything an adapter does, such as
 running Ecto queries, cannot add events to any trace, and TraceGuard never
 handles its own report events. So storage can't trigger recursive diagnostics.
 
-Three adapters exist:
+Four adapters exist:
 
 * `TraceGuard.ReportStore`, the default described above;
 * `TraceGuard.Storage.SQLite`, persistent (Phase 4, optional dependency);
+* `TraceGuard.Storage.Ecto`, your PostgreSQL through your Repo (Phase 6,
+  optional dependency);
 * `TraceGuard.TestStorage` (in `test/support`), a synchronous Agent-backed
   adapter that can also simulate overload, raising, exiting and contract
   violations. The shared contract suite (`test/support/storage_contract.ex`)
-  runs against all three.
+  runs against all four, the Ecto adapter against a real PostgreSQL.
+
+**Optional callback (Phase 6):** `list_matching/2` lets an adapter apply
+`list_reports/1` filters itself (in SQL, for example). The facade re-applies
+the exact-match criteria to whatever it returns, so an adapter can only
+narrow results, never widen them. Adapters without it keep the old behaviour
+(`list/1`, then filter).
 
 A queueing adapter should call `TraceGuard.Storage.lost_pending/1` with its
 module when it (re)starts, so that submissions which died with its previous

@@ -184,10 +184,12 @@ defmodule TraceGuard.Storage.SQLiteTest do
 
     assert TraceGuard.get_report(bad["trace_id"]) == {:error, :corrupt}
     assert TraceGuard.report_status(bad["trace_id"]) == {:error, :corrupt}
+    # Regression (Phase 6): await_report/2 must not crash on a corrupt row.
+    assert TraceGuard.await_report(bad["trace_id"], 100) == {:error, :corrupt}
     assert [%{"trace_id" => id}] = TraceGuard.list_reports()
     assert id == good["trace_id"]
-    # get_report + report_status + list each hit a corrupt row.
-    assert TraceGuard.report_stats().corrupt_reads == 3
+    # get_report + report_status + await_report + list each hit a corrupt row.
+    assert TraceGuard.report_stats().corrupt_reads == 4
   end
 
   test "submissions queued in a writer that dies are recorded as lost, by trace ID" do

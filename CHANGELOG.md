@@ -7,6 +7,23 @@ Before 1.0, minor versions may change the API; changes are listed here.
 
 First release candidate. Not published to Hex.
 
+### Phase 6: Ecto/PostgreSQL storage (experimental)
+
+* `TraceGuard.Storage.Ecto`: stores reports in the application's own
+  PostgreSQL database through its existing Ecto Repo (optional dependency
+  `ecto_sql ~> 3.10`). One bounded writer, the same admission and drop
+  semantics as the other adapters, no database work in the request.
+* `TraceGuard.Storage.Ecto.Migration` (versioned `up`/`down`) and
+  `mix trace_guard.gen.ecto_migration`. Nothing is migrated automatically.
+* Optional storage callback `list_matching/2`: adapters may filter
+  `list_reports/1` themselves; the facade re-checks the results.
+* **Fixed:** `await_report/2` could raise `CaseClauseError` when a stored
+  report was corrupt (SQLite since Phase 4); it now returns
+  `{:error, :corrupt}`, immediately if the report is already present.
+* Real PostgreSQL 16 test suite (`TRACE_GUARD_POSTGRES_URL`),
+  `scripts/local_postgres.sh`, `scripts/external_postgres_smoke.sh`, and
+  `ecto_sql` pins in the compatibility matrix.
+
 ### Phase 5: release preparation
 
 * **Fixed (Cowboy):** reports for `throw` and `exit` failures (including a

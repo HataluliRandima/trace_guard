@@ -96,9 +96,18 @@ iex> TraceGuard.export_json("9a172de8c3a49cac179676daf5950dca", pretty: true)
 | a trace ID, and want to know what happened to its report | `TraceGuard.report_status(id)`: `:stored`, `{:dropped, reason}`, `:pending` or `:unknown` |
 | a report to share | `TraceGuard.export_json(id, pretty: true)` |
 
-Reports live in a bounded in-memory store by default, or in a SQLite file
-with the optional adapter ([docs/storage.md](docs/storage.md)). All lookups
-are node-local functions; TraceGuard serves nothing over HTTP.
+Reports live in a bounded in-memory store by default. Two optional
+adapters persist them:
+
+* **your application's PostgreSQL**, through your existing Ecto Repo (no
+  second Repo or database):
+  `config :trace_guard, storage: {TraceGuard.Storage.Ecto, repo: MyApp.Repo}`,
+  then `mix trace_guard.gen.ecto_migration && mix ecto.migrate`. This is
+  experimental;
+* **a SQLite file**, for development and testing.
+
+See [docs/storage.md](docs/storage.md) for which to choose. All lookups are
+node-local functions; TraceGuard serves nothing over HTTP.
 
 ## Work outside the request process (opt-in)
 
@@ -167,11 +176,14 @@ seven planted secrets appear in them. See [demo/README.md](https://github.com/Ha
   `trace_guard_id`. Current Cowboy needs OTP 27 or later.
 * **`debug_errors: true`:** failures outside the router are not reported.
 * **Exceptions after the response was sent** are not reported.
-* **Storage is local:** in memory (lost on restart), or SQLite for
-  development and testing. Under a burst, reports beyond
+* **Storage:** in memory (lost on restart), SQLite (development and
+  testing), or your PostgreSQL through your Ecto Repo (experimental;
+  verified on PostgreSQL 16 only). Under a burst, reports beyond
   `max_pending_reports` are refused (and recorded as dropped), not queued.
-* **Untested:** PostgreSQL, Ecto SQL other than 3.14, macOS, Windows,
-  releases, multiple nodes, long-running load. See
+  Deleting reports from PostgreSQL is logical: copies can remain in WAL,
+  replicas and backups.
+* **Untested:** PostgreSQL versions other than 16, macOS, Windows, releases,
+  multiple nodes, long-running load. See the verified combinations. See
   [docs/compatibility.md](docs/compatibility.md).
 * **Performance** has been measured on one laptop only. Observations, not
   guarantees, are in [docs/performance.md](docs/performance.md).
@@ -183,6 +195,9 @@ mix test                          # library (148 tests + 1 doctest)
 (cd demo && mix test)             # demo application (16 tests)
 scripts/compat_matrix.sh          # library on several Elixir/OTP/dependency versions
 scripts/external_smoke.sh         # a fresh Phoenix app integrating TraceGuard (Bandit/Cowboy x memory/SQLite)
+eval "$(scripts/local_postgres.sh start | tail -1)"   # a user-local PostgreSQL (or set TRACE_GUARD_POSTGRES_URL)
+mix test                          # now also runs the real PostgreSQL suite
+scripts/external_postgres_smoke.sh                   # a fresh Phoenix app on PostgreSQL using the Ecto adapter
 MIX_ENV=dev mix docs              # HexDocs-style documentation in doc/
 ```
 

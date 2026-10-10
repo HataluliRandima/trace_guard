@@ -17,6 +17,8 @@ defmodule TraceGuard.StorageContract do
 
       import TraceGuard.TestHelpers
 
+      @moduletag unquote(opts[:moduletag] || [])
+
       @storage unquote(opts[:storage])
 
       setup do

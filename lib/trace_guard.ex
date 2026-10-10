@@ -113,13 +113,19 @@ defmodule TraceGuard do
     * `{:error, {:dropped, reason}}` if it was refused or lost, either
       while waiting or **before the call** when its drop record is still
       retained (see `report_status/1`);
+    * `{:error, :corrupt}` if the adapter holds the report but can't read it;
     * `{:error, :timeout}` if none of this is observed within `timeout` ms,
       for example a report that was evicted, or whose drop record expired.
   """
   @spec await_report(String.t(), timeout()) ::
           {:ok, report()}
           | {:error,
-             :invalid_trace_id | :timeout | :not_found | :unavailable | {:dropped, term()}}
+             :invalid_trace_id
+             | :timeout
+             | :not_found
+             | :unavailable
+             | :corrupt
+             | {:dropped, term()}}
   def await_report(trace_id, timeout \\ 5_000) do
     if Context.valid_trace_id?(trace_id) do
       ref = make_ref()
@@ -141,6 +147,10 @@ defmodule TraceGuard do
         case Storage.get(trace_id, timeout: timeout) do
           {:ok, report} ->
             {:ok, report}
+
+          # Present but unreadable: a definite answer, not "not yet".
+          {:error, :corrupt} ->
+            {:error, :corrupt}
 
           _not_yet ->
             await_outcome(trace_id, ref, remaining)
@@ -224,7 +234,7 @@ defmodule TraceGuard do
     case Storage.get(trace_id, timeout: max(timeout, 1)) do
       {:ok, report} -> {:ok, report}
       :error -> {:error, :not_found}
-      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, reason} when reason in [:unavailable, :corrupt] -> {:error, reason}
     end
   end
 
@@ -300,14 +310,9 @@ defmodule TraceGuard do
         end
       end)
 
-    case Storage.list() do
-      summaries when is_list(summaries) ->
-        Enum.filter(summaries, fn summary ->
-          Enum.all?(criteria, fn {field, value} -> summary[field] == value end)
-        end)
-
-      {:error, :unavailable} ->
-        []
+    case Storage.list_matching(criteria) do
+      summaries when is_list(summaries) -> summaries
+      {:error, :unavailable} -> []
     end
   end
 

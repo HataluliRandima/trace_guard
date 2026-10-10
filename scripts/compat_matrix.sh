@@ -15,22 +15,30 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${WORK:-$(mktemp -d -t trace_guard_compat.XXXXXX)}"
 SUMMARY="$WORK/summary.md"
+mkdir -p "$WORK"
 
-# name | elixir | erlang | phoenix (test) | plug | telemetry
+# name | elixir | erlang | phoenix (test) | plug | telemetry | ecto_sql (optional)
+# The PostgreSQL suite runs in every row when TRACE_GUARD_POSTGRES_URL is set
+# (see scripts/local_postgres.sh); otherwise it is excluded and says so.
 ALL_ROWS=(
-  "current|1.17.0|26.1.2|~> 1.8.15|~> 1.20.3|~> 1.3"
-  "minimum|1.15.8-otp-26|26.1.2|~> 1.7.0|~> 1.14.0|~> 1.0.0"
-  "elixir117-otp27|1.17.1|27.0|~> 1.8.0|~> 1.18|~> 1.3"
-  "latest|1.20.1-otp-29|29.0|~> 1.8|~> 1.18|~> 1.3"
+  "current|1.17.0|26.1.2|~> 1.8.15|~> 1.20.3|~> 1.3|~> 3.14"
+  "minimum|1.15.8-otp-26|26.1.2|~> 1.7.0|~> 1.14.0|~> 1.0.0|~> 3.10.0"
+  "elixir117-otp27|1.17.1|27.0|~> 1.8.0|~> 1.18|~> 1.3|~> 3.12.0"
+  "latest|1.20.1-otp-29|29.0|~> 1.8|~> 1.18|~> 1.3|~> 3.14"
 )
 
 ROWS="${ROWS:-current minimum elixir117-otp27 latest}"
 
-echo "| Row | Elixir | OTP | Resolved phoenix / plug / telemetry / exqlite | deps.get | compile (warnings as errors) | tests |" > "$SUMMARY"
+echo "| Row | Elixir | OTP | Resolved phoenix / plug / telemetry / exqlite / ecto_sql / postgrex | deps.get | compile (warnings as errors) | tests |" > "$SUMMARY"
 echo "| --- | --- | --- | --- | --- | --- | --- |" >> "$SUMMARY"
+if [ -n "${TRACE_GUARD_POSTGRES_URL:-}" ]; then
+  echo "PostgreSQL suite: enabled ($TRACE_GUARD_POSTGRES_URL)" | tee -a "$SUMMARY"
+else
+  echo "PostgreSQL suite: EXCLUDED (TRACE_GUARD_POSTGRES_URL not set)" | tee -a "$SUMMARY"
+fi
 
 for row in "${ALL_ROWS[@]}"; do
-  IFS='|' read -r name elixir erlang phoenix plug telemetry <<< "$row"
+  IFS='|' read -r name elixir erlang phoenix plug telemetry ecto_sql <<< "$row"
   [[ " $ROWS " == *" $name "* ]] || continue
 
   dir="$WORK/$name"
@@ -44,6 +52,7 @@ for row in "${ALL_ROWS[@]}"; do
     -e "s|{:phoenix, \"~> 1.7\", only: :test}|{:phoenix, \"$phoenix\", only: :test}|" \
     -e "s|{:plug, \"~> 1.14\"}|{:plug, \"$plug\"}|" \
     -e "s|{:telemetry, \"~> 1.0\"}|{:telemetry, \"$telemetry\"}|" \
+    -e "s|{:ecto_sql, \"~> 3.10\", optional: true}|{:ecto_sql, \"$ecto_sql\", optional: true}|" \
     "$dir/mix.exs"
 
   echo "== $name: Elixir $elixir, OTP $erlang" | tee "$log"
@@ -57,7 +66,7 @@ for row in "${ALL_ROWS[@]}"; do
   deps="fail"; compile="not run"; tests="not run"; resolved="n/a"
   if run env MIX_ENV=test mix deps.get; then
     deps="ok"
-    resolved="$(cd "$dir" && for d in phoenix plug telemetry exqlite; do
+    resolved="$(cd "$dir" && for d in phoenix plug telemetry exqlite ecto_sql postgrex; do
       grep -o "\"$d\": {:hex, :$d, \"[^\"]*\"" mix.lock | sed 's/.*, "\(.*\)"/\1/'; done | paste -sd/ -)"
     if run env MIX_ENV=test mix compile --warnings-as-errors; then
       compile="ok"
