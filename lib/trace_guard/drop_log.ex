@@ -1,5 +1,8 @@
 defmodule TraceGuard.DropLog do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   A bounded record of recent report drops, and of submissions that were
   accepted but are not yet stored.
 

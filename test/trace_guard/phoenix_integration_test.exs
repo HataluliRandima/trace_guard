@@ -142,10 +142,69 @@ defmodule TraceGuard.PhoenixIntegrationTest do
 
     assert report["failure"]["captured_by"] == "phoenix.router_dispatch.exception"
     assert report["request"]["route"] == "/throw"
-    assert List.last(event_names(report)) == "phoenix.error_rendered"
+    # Phase 5: completed at the router exception, before rendering (see the
+    # Cowboy regression test below), so the trace ends there.
+    assert List.last(event_names(report)) == "request.stop"
     assert report["failure"]["kind"] == "throw"
     assert report["failure"]["exception"] == nil
     refute Jason.encode!(report) =~ "hunter2"
+  end
+
+  # Regression (found with Cowboy in Phase 5): Cowboy terminates the request
+  # process once its response is complete, so anything TraceGuard does after
+  # the response (at [:phoenix, :error_rendered]) can be cut short. Throws
+  # and exits must therefore be completed before rendering.
+  test "throw/exit reports survive the request process dying right after the response" do
+    killer = {__MODULE__, :killer}
+
+    :telemetry.detach({TraceGuard.Telemetry, :handlers})
+
+    :telemetry.attach(
+      killer,
+      [:phoenix, :error_rendered],
+      fn _event, _measurements, _meta, _config -> Process.exit(self(), :kill) end,
+      nil
+    )
+
+    # Re-attached after the killer, so the killer runs first.
+    TraceGuard.Telemetry.attach()
+    on_exit(fn -> :telemetry.detach(killer) end)
+
+    for path <- ["/throw", "/server/fail"] do
+      {pid, ref} = spawn_monitor(fn -> get(build_conn(), path) end)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
+
+      route = if path == "/throw", do: "/throw", else: "/server/fail"
+      report = fetch_report_where!(route: route)
+      assert report["failure"]["kind"] in ["throw", "exit"]
+    end
+  end
+
+  # Documented limitation (Cowboy): an exception in an *endpoint plug* has no
+  # router event, so [:phoenix, :error_rendered], after the response, is the
+  # only signal. If the request process dies first, the report is lost.
+  test "endpoint-plug failures are lost if the process dies right after the response" do
+    killer = {__MODULE__, :endpoint_killer}
+    :telemetry.detach({TraceGuard.Telemetry, :handlers})
+
+    :telemetry.attach(
+      killer,
+      [:phoenix, :error_rendered],
+      fn _event, _measurements, _meta, _config -> Process.exit(self(), :kill) end,
+      nil
+    )
+
+    TraceGuard.Telemetry.attach()
+    on_exit(fn -> :telemetry.detach(killer) end)
+    before = TraceGuard.report_stats().submitted
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        get(put_req_header(build_conn(), "x-test-endpoint-crash", "1"), "/ok")
+      end)
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
+    assert TraceGuard.report_stats().submitted == before
   end
 
   test "exceptions raised outside the router are captured via [:phoenix, :error_rendered]" do

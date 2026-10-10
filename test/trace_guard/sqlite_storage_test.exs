@@ -228,6 +228,71 @@ defmodule TraceGuard.Storage.SQLiteTest do
     assert raw_rows(path, "SELECT name FROM sqlite_master WHERE type = 'table'") == []
   end
 
+  describe "release hardening (Phase 5)" do
+    test "a database file the adapter creates is readable by its owner only" do
+      {path, _opts, _pid} = use_sqlite("permissions")
+      submit!(report())
+
+      for file <- [path, path <> "-wal", path <> "-shm"], File.exists?(file) do
+        assert File.stat!(file).mode |> Bitwise.band(0o777) == 0o600, "#{file} is not 0600"
+      end
+    end
+
+    test "an existing file keeps the permissions it was given" do
+      path = db_path("existing_permissions")
+      for suffix <- ["", "-wal", "-shm"], do: File.rm(path <> suffix)
+      File.mkdir_p!(Path.dirname(path))
+      raw_exec(path, "PRAGMA user_version = 0")
+      File.chmod!(path, 0o640)
+
+      start_supervised!({SQLite, database: path}, restart: :temporary)
+      configure(storage: {SQLite, database: path})
+      assert %{available: true} = TraceGuard.report_stats()
+      assert File.stat!(path).mode |> Bitwise.band(0o777) == 0o640
+    end
+
+    test "deleted, cleared and cleaned-up reports leave no trace in the files" do
+      {path, _opts, _pid} = use_sqlite("secure_delete", max_age: 60_000)
+
+      [a, b, c] =
+        for _ <- 1..3,
+            do: submit!(report(%{"marker" => "MARKER-#{System.unique_integer([:positive])}"}))
+
+      disk = fn ->
+        Enum.map_join(["", "-wal"], &(File.read(path <> &1) |> elem(1) |> to_string()))
+      end
+
+      assert :ok = TraceGuard.delete_report(a["trace_id"])
+      refute disk.() =~ a["marker"]
+
+      raw_exec(
+        path,
+        "UPDATE trace_guard_reports SET stored_at = 0 WHERE trace_id = '#{b["trace_id"]}'"
+      )
+
+      assert {:ok, 1} = SQLite.cleanup()
+      refute disk.() =~ b["marker"]
+
+      assert disk.() =~ c["marker"]
+      assert :ok = TraceGuard.clear_reports()
+      refute disk.() =~ c["marker"]
+    end
+
+    test "invalid or unknown options are rejected at start" do
+      Process.flag(:trap_exit, true)
+
+      for opts <- [
+            [database: db_path("bad1"), max_reprots: 3],
+            [database: ""],
+            [max_reports: 3],
+            [database: db_path("bad2"), max_reports: 0],
+            [database: db_path("bad3"), busy_timeout: -1]
+          ] do
+        assert {:error, {%ArgumentError{}, _}} = SQLite.start_link(opts)
+      end
+    end
+  end
+
   defp submit!(r) do
     assert {:ok, :queued} = Storage.put(r)
     assert {:ok, ^r} = TraceGuard.await_report(r["trace_id"], 2_000)

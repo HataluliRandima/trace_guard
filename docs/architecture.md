@@ -75,7 +75,7 @@ context. Consequences:
   `handle_call/3` under it for that one callback. See
   [genserver_propagation.md](genserver_propagation.md).
 * **Process reuse is handled.** Bandit reuses the connection process for
-  keep-alive requests. Each `TraceGuard.Plug.call/2` replaces any stale
+  keep-alive requests. Each `TraceGuard.Plug`'s `call/2` replaces any stale
   context, and completing a trace deletes it. Tests run consecutive
   failing and succeeding requests in one process and check that each report
   contains only its own events.
@@ -124,12 +124,23 @@ From `Phoenix.Router.__call__/5` and `Phoenix.Endpoint.RenderErrors`:
 | Failure | What happens | Report |
 | --- | --- | --- |
 | `:error` raised in a controller/router pipeline | `router_dispatch.exception` records the failure → `RenderErrors` sends with the wrapped conn → TraceGuard's `before_send` completes the trace | ✅ with route, events, failure and `x-traceguard-id` header |
-| `throw`/`exit` in a controller | `router_dispatch.exception` records the failure → rendered with the endpoint's original conn (no `before_send`) → `error_rendered` handler completes the trace | ✅, but no response header |
-| Exception in an endpoint plug after `TraceGuard.Plug` | No router event → rendered with the original conn → `error_rendered` handler records the failure and completes the trace | ✅ (`captured_by: "phoenix.error_rendered"`), no header, no route |
+| `throw`/`exit` in a controller (including a crashed `Task.await/2` or `TraceGuard.call/3`) | `router_dispatch.exception` records the failure **and completes the trace right there** (Phase 5): Phoenix always renders throws and exits as 500, and no `before_send` of TraceGuard's will run | ✅, but no response header |
+| Exception in an endpoint plug after `TraceGuard.Plug` | No router event → rendered with the original conn → `error_rendered` handler, *after* the response, records the failure and completes the trace | ✅ under Bandit (`captured_by: "phoenix.error_rendered"`), no header, no route. ⚠️ Under Cowboy it can be lost (see below) |
 | Error status without an exception (e.g. `send_resp(conn, 503, ...)`) | `before_send` sees a status ≥ `:failure_status` | ✅ (`outcome: "error_status"`) |
 | `debug_errors: true`, failure in the router | `Plug.Debugger` renders with the wrapped conn → `before_send` | ✅ |
 | `debug_errors: true`, failure outside the router | `Plug.Debugger` renders with the original conn, and `RenderErrors` emits nothing because the response is already sent | ❌ (documented limitation, covered by a test) |
 | Exception after the response was sent | The trace was completed at send time with the success status | ❌ (documented limitation, covered by a test) |
+
+**Why the completion point matters: Cowboy.** Cowboy runs each request in a
+separate process and terminates it (`exit(Pid, shutdown)`) as soon as the
+response is complete. Anything TraceGuard does *after* the response can
+therefore be cut short. Phase 1–4 completed throw and exit traces at
+`[:phoenix, :error_rendered]` (after the response), and under Cowboy those
+reports were lost in 3 of 4 runs of the external integration test. Phase 5
+completes them before rendering. Exceptions in endpoint plugs have no
+earlier signal, so they keep this limitation (pinned by a test that kills the
+request process at that point). Bandit runs the request in the connection
+process, which continues after the response.
 
 The first failure recorded wins. A later, less specific signal never
 overwrites it.

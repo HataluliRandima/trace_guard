@@ -1,5 +1,7 @@
 defmodule TraceGuard.Storage do
   @moduledoc """
+  **Experimental in 0.1.0-rc.1** (the storage behaviour): the API may change before 1.0.
+
   Where finished reports go: a small behaviour plus the facade that the
   tracing engine and the public API call.
 

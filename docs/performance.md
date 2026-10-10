@@ -2,12 +2,51 @@
 
 TraceGuard's overhead, measured on the demo application. Every figure here
 was produced by the commands below. Raw outputs are in
-[`demo/bench/results/`](../demo/bench/results/).
+[`demo/bench/results/`](https://github.com/HataluliRandima/trace_guard/tree/main/demo/bench/results).
 
 > These are measurements of **one laptop running WSL2**, not production
 > performance figures. Treat the latency columns as order-of-magnitude
 > indications. Memory figures are deterministic and repeat exactly between
 > runs.
+
+## Release-candidate summary: what can be published (Phase 5 review)
+
+No production overhead target is claimed. Everything was measured on one
+WSL2 laptop, in-process, against SQLite.
+
+**Reliable observations.** These repeat exactly between runs, or held in
+every run:
+
+* Allocation in the request process: about **5.4–5.6 KB** per successful
+  request, about **1.1 KB** per recorded query event, about **0.37 KB** per
+  dropped event, and about **218 KB** to build one failure report.
+* Report size: about **15 KB** (demo checkout) to about **122 KB** (near-worst
+  case), so the default store bounds hold at most about **1.5–12 MB** of
+  reports.
+* Queue bounds hold under load: the store's mailbox never exceeded
+  `max_pending_reports` (50 of 50 during a locked-database outage with 500
+  failing requests).
+* Report building got cheaper in Phase 2 (842 KB → 212 KB per report).
+
+**Indicative, order of magnitude only.** These come from quiet runs, but on a
+single machine:
+
+* fixed cost of a successful request: **5–9 µs** median;
+* building a failure report: **0.7–1.0 ms** median;
+* a traced GenServer call: **about 5 µs**; the wrapper with no trace: **about
+  0.1 µs**;
+* first propagation in a request (collector start): **about 100 µs**
+  (recorded as future work);
+* storing a report: **about 10 µs** in memory, **about 0.4 ms** in SQLite
+  (p99 about 5 ms).
+
+**Noisy, don't publish.** Latency deltas for database-bound scenarios
+(catalog, audit, parallel catalog), all p99 deltas, and the concurrent pass.
+Their within-run drift was as large as the effect.
+
+**Not measured.** PostgreSQL, Cowboy (functionally tested only), real network
+I/O, production hardware, releases, multiple nodes, and long-running memory
+behaviour.
 
 ## How to run
 
@@ -106,11 +145,11 @@ Two new measurements, run on the same laptop:
 * `bench/phase4_costs.exs` isolates propagation, admission, persistence,
   retrieval, a failure burst and a database outage:
   `MIX_ENV=bench mix run --no-start bench/phase4_costs.exs` (result:
-  [`phase4-costs.md`](../demo/bench/results/phase4-costs.md)).
+  [`phase4-costs.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase4-costs.md)).
 * `bench.requests` gained scenario 6 (`POST /api/quote`: one traced
   GenServer call with one query). It ran twice:
-  [`phase4-run1.md`](../demo/bench/results/phase4-run1.md),
-  [`phase4-run2.md`](../demo/bench/results/phase4-run2.md).
+  [`phase4-run1.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase4-run1.md),
+  [`phase4-run2.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase4-run2.md).
 
 All three runs used the working tree with Phase 4 uncommitted. After them,
 two guards were added to the propagation path (ignore tokens from another
@@ -194,8 +233,8 @@ narrow drift (health, 3a in run 2, scenario 6 in run 1) are the usable ones:
 
 Two full runs with the default settings (3 rounds; 1 s warm-up, 3 s timing,
 1 s memory per measurement). The raw files are
-[`phase3-run1.md`](../demo/bench/results/phase3-run1.md) and
-[`phase3-run2.md`](../demo/bench/results/phase3-run2.md), which also hold
+[`phase3-run1.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase3-run1.md) and
+[`phase3-run2.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase3-run2.md), which also hold
 per-round data. Both were run from a working tree with the Phase 3 changes
 uncommitted.
 

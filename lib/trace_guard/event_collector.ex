@@ -1,5 +1,8 @@
 defmodule TraceGuard.EventCollector do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Appends diagnostic events to the calling process's `TraceGuard.Context`.
 
   Every event has the same internal shape:

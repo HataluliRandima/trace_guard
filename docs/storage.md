@@ -185,6 +185,16 @@ and the adapter reports itself unavailable. The table definition is in the
 | `:cleanup_interval` | 60000 | Periodic cleanup (ms). `TraceGuard.Storage.SQLite.cleanup/0` runs it on demand. |
 | `:busy_timeout` | 1000 | How long a write waits for a SQLite lock (ms). |
 | `:call_timeout` | 5000 | Default read timeout (ms). |
+| `:file_mode` | `0o600` | Permissions of a database file the adapter creates (Phase 5). SQLite gives `-wal`/`-shm` the same mode. Existing files keep theirs. |
+
+Unknown or invalid options raise `ArgumentError` when the adapter starts
+(Phase 5).
+
+**Deleted data (Phase 5).** `PRAGMA secure_delete = ON` zeroes deleted
+content, and each delete, clear and cleanup ends with
+`PRAGMA wal_checkpoint(TRUNCATE)`. A test reads the raw database and WAL
+files after each operation and finds no trace of the removed reports. Before
+Phase 5, deleted reports stayed readable in the files.
 
 **Write path.** Admission happens in the request process, exactly as for
 `ReportStore`: one `:atomics` add against `:max_pending_reports`, then

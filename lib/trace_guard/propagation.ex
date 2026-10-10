@@ -1,5 +1,8 @@
 defmodule TraceGuard.Propagation do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Explicit, opt-in propagation of a request's trace into selected processes.
 
   Telemetry handlers run in the process that emits an event, and
@@ -47,7 +50,11 @@ defmodule TraceGuard.Propagation do
   alias TraceGuard.{Config, Context, EventCollector, TaskCollector}
 
   defmodule Token do
-    @moduledoc false
+    @moduledoc """
+    **Internal.** The opaque value `TraceGuard.wrap/1` and `TraceGuard.call/3`
+    carry into other processes: a trace ID, the trace's collector pid and an
+    `:atomics` budget reference. Never construct or inspect it.
+    """
     @enforce_keys [:trace_id, :collector, :counter]
     defstruct [:trace_id, :collector, :counter]
 

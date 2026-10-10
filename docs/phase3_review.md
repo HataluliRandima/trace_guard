@@ -13,7 +13,7 @@ actually did:
 | 3 | `get/1` and `list/0` were `GenServer.call/2` with the default 5 s timeout and no handling. A dead or stuck store made `TraceGuard.get_report/1` **exit in the caller**. | Code. |
 | 4 | `list_reports/0` copied every retained report (up to `max_reports` full reports) out of the store to build summaries. | Code. |
 | 5 | Failures without a response header (throw, exit, endpoint-level) could only be found by scanning `list_reports/0`, whose summaries had no correlation fields. Tests polled with sleeps. | Code, tests. |
-| 6 | Storage was hard-wired: the engine called `TraceGuard.ReportStore.put/1` directly. | Code. |
+| 6 | Storage was hard-wired: the engine called `ReportStore.put/1` directly. | Code. |
 
 The resource bounds and failure semantics otherwise matched the Phase 2
 review: per-trace event caps, task collector bounds, and no rescue of

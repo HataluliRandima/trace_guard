@@ -1,5 +1,8 @@
 defmodule TraceGuard.Config do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Validated TraceGuard configuration.
 
   Configuration is read from the `:trace_guard` application environment when

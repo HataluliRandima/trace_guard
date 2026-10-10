@@ -1,5 +1,7 @@
 defmodule TraceGuard.Server do
   @moduledoc """
+  **Experimental in 0.1.0-rc.1** (explicit GenServer propagation): the API may change before 1.0.
+
   Explicit trace propagation into selected `GenServer.call/3` operations.
 
   A GenServer is a long-lived process that serves many callers, so its work

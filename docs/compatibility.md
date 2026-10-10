@@ -8,13 +8,13 @@ allowed by the version constraints in `mix.exs`.
 `scripts/compat_matrix.sh` copies the library into a scratch directory,
 pins the dependency requirements there, resolves them from scratch (no lock
 file), and runs `mix deps.get`, `mix compile --warnings-as-errors` and the
-full test suite (142 tests + 1 doctest, including real Phoenix requests,
+full test suite (148 tests + 1 doctest, including real Phoenix requests,
 Task and GenServer propagation, and all three storage adapters, SQLite
 included).
 
 | Row | Elixir | OTP | Phoenix (test) | Plug | Telemetry | Jason | Exqlite | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| minimum | 1.15.8 | 26.1.2 | 1.7.24 | 1.14.2 | 1.0.0 | 1.4.5 | 0.42.0 | ✅ 142 tests + 1 doctest, 0 failures |
+| minimum | 1.15.8 | 26.1.2 | 1.7.24 | 1.14.2 | 1.0.0 | 1.4.5 | 0.42.0 | ✅ 148 tests + 1 doctest, 0 failures |
 | current (lock file) | 1.17.0 | 26.1.2 | 1.8.15 | 1.20.3 | 1.4.2 | 1.4.5 | 0.42.0 | ✅ |
 | Elixir 1.17 on OTP 27 | 1.17.1 | 27.0 | 1.8.15 | 1.20.3 | 1.4.2 | 1.4.5 | 0.42.0 | ✅ |
 | latest | 1.20.1 | 29.0 | 1.8.15 | 1.20.3 | 1.4.2 | 1.4.5 | 0.42.0 | ✅ |
@@ -33,6 +33,50 @@ The script needs asdf with the listed Elixir and Erlang versions installed,
 and access to hex.pm. Elixir 1.15.8 was installed for this phase
 (`asdf install elixir 1.15.8-otp-26`, then `mix local.hex` for it).
 
+## External integration (Phase 5)
+
+`scripts/external_smoke.sh` generates a brand-new Phoenix application with
+`mix phx.new` (SQLite, no HTML or assets), outside this repository and not
+derived from the demo. It then:
+
+* adds TraceGuard as a path dependency;
+* configures it with documented options only;
+* installs `TraceGuard.Plug`;
+* adds a controller that fails after an Ecto query and a wrapped Task, and a
+  `use TraceGuard.Server` GenServer that crashes;
+* runs the new app's own test suite over **real HTTP** against the running
+  endpoint.
+
+The tests use only `TraceGuard`'s public functions: `await_report/2`,
+`report_status/1`, `export_json/2`, `list_reports/1`, `report_stats/0`,
+`clear_reports/0`, `wrap/1` and `call/3`.
+
+| Toolchain | HTTP adapter | Storage | Result |
+| --- | --- | --- | --- |
+| Elixir 1.17.0 / OTP 26.1.2 | Bandit 1.12 | in memory | ✅ 6 tests, 0 failures |
+| Elixir 1.17.0 / OTP 26.1.2 | Bandit 1.12 | SQLite | ✅ 6 tests, 0 failures |
+| Elixir 1.17.1 / OTP 27.0 | Bandit 1.12 | in memory | ✅ 6 tests, 0 failures |
+| Elixir 1.17.1 / OTP 27.0 | Bandit 1.12 | SQLite | ✅ 6 tests, 0 failures |
+| Elixir 1.17.1 / OTP 27.0 | Cowboy 2.20 (`plug_cowboy` 2.9) | in memory | ✅ 6 tests, 0 failures (5 further runs: 5 passed) |
+| Elixir 1.17.1 / OTP 27.0 | Cowboy 2.20 (`plug_cowboy` 2.9) | SQLite | ✅ 6 tests, 0 failures (5 further runs: 5 passed) |
+
+The generated app also started as a normal dev server (`mix phx.server`),
+and a real failing request returned Phoenix's generic 500 with an
+`x-traceguard-id` header.
+
+What the external run found and changed:
+
+* **Cowboy lost reports for throws and exits** (3 of 4 runs) until Phase 5
+  completed those traces before rendering. See
+  [architecture.md](architecture.md).
+* **Cowboy 2.20 / cowlib 2.21 need OTP 27+**: cowlib uses `maybe`
+  expressions, which don't compile on OTP 26. This is a constraint of
+  Cowboy, not TraceGuard.
+* **Log discovery differs by adapter.** Bandit's crash log carries
+  `trace_guard_id`; Cowboy's doesn't. Both contain the raw secret that the
+  report redacted.
+* **SQLite file permissions** were `0644` and are now `0600`.
+
 ## Declared requirements
 
 | Dependency | Requirement | Lowest verified | Notes |
@@ -48,12 +92,13 @@ and access to hex.pm. Elixir 1.15.8 was installed for this phase
 
 ## Not tested (outstanding)
 
-* **Cowboy** (`plug_cowboy`). Only Bandit has been exercised over real HTTP.
-  In particular, Cowboy logs crashes from a different process, so the
-  crash-log discovery path probably doesn't carry `trace_guard_id`.
 * **PostgreSQL / Postgrex**, MySQL, and `ecto_sql` versions other than 3.14.
-  No PostgreSQL server was available in the development environment, and
-  Docker was not used.
+  No PostgreSQL server is installed in the development environment, Docker
+  isn't available, and installing one would need `sudo` (password
+  required). The Ecto query event shape on PostgreSQL is therefore
+  unverified. **Outstanding before a stable release.**
+* **Cowboy on OTP 26** (current Cowboy doesn't compile there), and older
+  Cowboy versions.
 * **Elixir 1.16, 1.18, 1.19** and **OTP 25, 28.**
 * **Operating systems other than Linux under WSL2.** macOS, Windows and
   native Linux are untested; the SQLite adapter's file handling is the most

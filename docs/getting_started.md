@@ -162,8 +162,10 @@ TraceGuard.list_reports(incoming_id: "checkout-7f3a")   # exact match
 TraceGuard.list_reports(request_id: "F5zX...")         # from the crash log line
 ```
 
-With `metadata: [:request_id, :trace_guard_id]` in your logger format,
-Bandit's crash log line also carries the trace ID. All the options are in
+With `metadata: [:request_id, :trace_guard_id]` in your logger format, and a
+format that prints `$metadata` (Phoenix's default *dev* format,
+`"[$level] $message\n"`, doesn't), Bandit's crash log line also carries the
+trace ID. Cowboy's doesn't: it logs from a different process. All the options are in
 [storage.md](storage.md#finding-a-report-without-a-response-header).
 
 ## 7b. Was my report kept?

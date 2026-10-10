@@ -1,5 +1,8 @@
 defmodule TraceGuard.TraceBuilder do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Turns a finished `TraceGuard.Context` into a diagnostic report.
 
   The pipeline is fixed and runs entirely in the request process when the

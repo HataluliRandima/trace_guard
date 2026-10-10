@@ -1,5 +1,8 @@
 defmodule TraceGuard.TaskCollector do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Receives the events of propagated (wrapped) work for one trace.
 
   One collector exists per trace that called `TraceGuard.wrap/1`, started

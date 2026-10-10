@@ -1,6 +1,8 @@
 if Code.ensure_loaded?(Exqlite.Sqlite3) do
   defmodule TraceGuard.Storage.SQLite do
     @moduledoc """
+    **Experimental in 0.1.0-rc.1** (the SQLite adapter): the API may change before 1.0.
+
     A persistent `TraceGuard.Storage` adapter for local development and
     testing: reports are kept in a SQLite file and survive restarts.
 
@@ -21,6 +23,12 @@ if Code.ensure_loaded?(Exqlite.Sqlite3) do
       * `:busy_timeout`: how long a write waits for a SQLite lock, in ms
         (default 1_000).
       * `:call_timeout`: default timeout for reads, in ms (default 5_000).
+      * `:file_mode`: permissions given to the database file when the adapter
+        **creates** it (default `0o600`, owner read/write only). SQLite gives
+        its `-wal` and `-shm` files the same mode. An existing file keeps its
+        permissions.
+
+    Unknown or invalid options raise `ArgumentError` when the adapter starts.
 
     ## Writes never block requests
 
@@ -70,6 +78,14 @@ if Code.ensure_loaded?(Exqlite.Sqlite3) do
 
     WAL journal mode with `synchronous = NORMAL`: a power loss can lose the
     most recent commits but doesn't corrupt the file.
+
+    ## Deleted data
+
+    `PRAGMA secure_delete = ON` makes SQLite zero deleted content, and every
+    delete, clear and cleanup is followed by
+    `PRAGMA wal_checkpoint(TRUNCATE)`, so removed reports don't linger in the
+    database or WAL files. (Copies made outside SQLite, such as backups and
+    filesystem snapshots, are out of scope.)
     """
 
     @behaviour TraceGuard.Storage
@@ -159,8 +175,19 @@ if Code.ensure_loaded?(Exqlite.Sqlite3) do
 
     ## Writer process
 
+    @options [
+      :database,
+      :max_reports,
+      :max_age,
+      :cleanup_interval,
+      :busy_timeout,
+      :call_timeout,
+      :file_mode
+    ]
+
     @impl GenServer
     def init(opts) do
+      validate_options!(opts)
       path = Keyword.fetch!(opts, :database)
 
       # Submissions admitted to a previous writer and never committed.
@@ -242,7 +269,7 @@ if Code.ensure_loaded?(Exqlite.Sqlite3) do
     def handle_call({:delete, id}, _from, state) do
       reply =
         case query(state.conn, "DELETE FROM trace_guard_reports WHERE trace_id = ?1", [id]) do
-          {:ok, _} -> :ok
+          {:ok, _} -> checkpoint(state.conn)
           {:error, _} -> {:error, :unavailable}
         end
 
@@ -252,7 +279,7 @@ if Code.ensure_loaded?(Exqlite.Sqlite3) do
     def handle_call(:clear, _from, state) do
       reply =
         case query(state.conn, "DELETE FROM trace_guard_reports", []) do
-          {:ok, _} -> :ok
+          {:ok, _} -> checkpoint(state.conn)
           {:error, _} -> {:error, :unavailable}
         end
 
@@ -290,6 +317,39 @@ if Code.ensure_loaded?(Exqlite.Sqlite3) do
     @impl GenServer
     def terminate(_reason, %{conn: conn}) when conn != nil, do: Sqlite3.close(conn)
     def terminate(_reason, _state), do: :ok
+
+    defp validate_options!(opts) do
+      case Keyword.keys(opts) -- @options do
+        [] ->
+          :ok
+
+        unknown ->
+          raise ArgumentError, "unknown #{inspect(__MODULE__)} options: #{inspect(unknown)}"
+      end
+
+      unless is_binary(opts[:database]) and opts[:database] != "",
+        do: raise(ArgumentError, "#{inspect(__MODULE__)} requires :database (a file path)")
+
+      for key <- [:max_reports, :cleanup_interval, :call_timeout],
+          Keyword.has_key?(opts, key),
+          not (is_integer(opts[key]) and opts[key] > 0),
+          do:
+            raise(
+              ArgumentError,
+              "#{inspect(__MODULE__)} option #{inspect(key)} must be a positive integer"
+            )
+
+      for key <- [:max_age, :busy_timeout, :file_mode],
+          Keyword.has_key?(opts, key),
+          not (is_integer(opts[key]) and opts[key] >= 0),
+          do:
+            raise(
+              ArgumentError,
+              "#{inspect(__MODULE__)} option #{inspect(key)} must be a non-negative integer"
+            )
+
+      :ok
+    end
 
     ## Writing
 
@@ -393,7 +453,15 @@ if Code.ensure_loaded?(Exqlite.Sqlite3) do
           {:error, _} -> 0
         end
 
+      if by_age + by_count > 0, do: checkpoint(state.conn)
       {{:ok, by_age + by_count}, %{state | evicted: state.evicted + by_age + by_count}}
+    end
+
+    # Moves WAL content into the database (where secure_delete has zeroed
+    # deleted rows) and truncates the WAL file.
+    defp checkpoint(conn) do
+      _ = query(conn, "PRAGMA wal_checkpoint(TRUNCATE)", [])
+      :ok
     end
 
     defp max_reports(state), do: Keyword.get(state.opts, :max_reports, Config.get().max_reports)
@@ -419,8 +487,11 @@ if Code.ensure_loaded?(Exqlite.Sqlite3) do
     end
 
     defp open(path, opts) do
+      new_file? = not File.exists?(path)
+
       with :ok <- File.mkdir_p(Path.dirname(path)),
-           {:ok, conn} <- Sqlite3.open(path) do
+           {:ok, conn} <- Sqlite3.open(path),
+           :ok <- restrict_permissions(new_file?, path, opts) do
         case setup(conn, opts) do
           {:ok, seq} ->
             {:ok, conn, seq}
@@ -432,8 +503,16 @@ if Code.ensure_loaded?(Exqlite.Sqlite3) do
       end
     end
 
+    # Only a file the adapter creates is restricted; SQLite creates the -wal
+    # and -shm files with the database file's mode.
+    defp restrict_permissions(false, _path, _opts), do: :ok
+
+    defp restrict_permissions(true, path, opts),
+      do: File.chmod(path, Keyword.get(opts, :file_mode, 0o600))
+
     defp setup(conn, opts) do
       with :ok <- Sqlite3.set_busy_timeout(conn, Keyword.get(opts, :busy_timeout, 1_000)),
+           :ok <- exec(conn, "PRAGMA secure_delete = ON"),
            {:ok, _} <- query(conn, "PRAGMA journal_mode = WAL", []),
            :ok <- exec(conn, "PRAGMA synchronous = NORMAL"),
            {:ok, [[version]]} <- query(conn, "PRAGMA user_version", []),

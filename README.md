@@ -1,316 +1,195 @@
 # TraceGuard
 
-> When an API request fails, TraceGuard reconstructs the relevant execution
-> timeline, correlates available telemetry events, safely redacts sensitive
-> information, and produces a useful diagnostic report.
+When a Phoenix request fails, TraceGuard gives you a **redacted diagnostic
+report for that one request**: the route, the Ecto queries it ran (in
+order, with timings), the work it did in Tasks and GenServer calls you opted
+in, the exception, and what TraceGuard could *not* see. It never changes the
+response or swallows the exception.
 
-**Status: Phase 4 (v0.1.0, unreleased).** It works end to end, its overhead
-has been measured ([docs/performance.md](docs/performance.md)), and its test
-suite passes on four verified combinations, from Elixir 1.15.8 / OTP 26 with
-Phoenix 1.7.24 to Elixir 1.20.1 / OTP 29 with Phoenix 1.8.15 (others are
-untested, see [docs/compatibility.md](docs/compatibility.md)). It is not
-production-hardened: see [Limitations](#limitations).
+**Status: 0.1.0-rc.1, release candidate, not on Hex.** Tested on four
+verified combinations from Elixir 1.15.8 / OTP 26 to Elixir 1.20.1 / OTP 29,
+with Phoenix 1.7.24 and 1.8.15, under Bandit and Cowboy. See
+[Limitations](#limitations) and [docs/compatibility.md](docs/compatibility.md).
 
-## The problem
+## Why not just logs or telemetry?
 
-A Phoenix API returns `500 Internal Server Error`. The log has a stack trace,
-but you still need to know what that particular request did before it failed:
-which route ran, which queries it issued and in what order, how long each
-step took, and whether a transaction was rolled back. Reconstructing this
-from interleaved logs of concurrent requests is slow, and the logs often
-contain secrets that you cannot paste into a ticket.
+* **Logs** interleave every concurrent request, and they include raw secrets.
+  Finding "what did *this* failing request do" means correlating lines by
+  hand.
+* **Telemetry** emits events, but nothing ties them back into one failed
+  request's story, and nothing redacts them.
+* **TraceGuard** attaches to the telemetry Phoenix and Ecto already emit. It
+  attributes each event to the request that caused it (by process, never by
+  timing) and keeps only failures. It produces one JSON document per failure
+  with sensitive keys redacted before the report leaves the request process.
+  It is a library in your app: no agent, no service, no network calls.
 
-TraceGuard records the telemetry events that Phoenix and Ecto already emit,
-attributes each one to the request that caused it, and on failure turns them
-into a redacted JSON report that is safe to share. You don't change any
-business logic: you add one plug and one config line.
+It is not a distributed tracer or an APM, and it doesn't trace function
+calls. It records the events listed in the report, nothing more.
 
-## What it does
+## Install
 
-| Capability | Status |
-| --- | --- |
-| Generates a unique 128-bit trace ID for each request (`x-traceguard-id` response header, `trace_guard_id` Logger metadata) | ✅ |
-| Records method, route template, start time, status and duration | ✅ |
-| Records Phoenix endpoint and router events and Ecto queries (timing, table, row count, outcome, calling function) | ✅ |
-| Attributes events to the correct request, including under concurrency | ✅ |
-| Includes events from selected `Task`s via explicit `TraceGuard.wrap/1` (Phase 2) | ✅ opt-in |
-| Reproducible enabled-vs-disabled overhead benchmark (Phase 2) | ✅ |
-| Captures exceptions through supported Phoenix telemetry, without rescuing them | ✅ |
-| Reports error responses that had no exception (e.g. a `503`) | ✅ |
-| Redacts sensitive keys recursively in maps, lists and header tuples, and scrubs labelled secrets from exception messages | ✅ |
-| Bounded in-memory report store with bounded admission: retained reports **and** queued submissions are capped, and refusals are counted and emitted as events (Phase 3) | ✅ |
-| `TraceGuard.Storage` behaviour (in-memory default, test adapter, contract suite) and JSON export (Phase 3) | ✅ |
-| Finding reports whose response has no trace header: correlation ID, request ID and route filters, plus `await_report/2` (Phase 3) | ✅ |
-| Validated incoming correlation ID (opt-in) | ✅ |
-| Explicit trace propagation into selected `GenServer.call/3` operations: `TraceGuard.call/3` and `use TraceGuard.Server` (Phase 4) | ✅ opt-in |
-| Persistent SQLite storage adapter for local development and testing, behind the same bounded queue (Phase 4) | ✅ optional `exqlite` |
-| `report_status/1`: stored / dropped (with reason, including `:lost`) / pending / unknown, from a bounded drop record (Phase 4) | ✅ |
-| Compatibility matrix script and verified version combinations (Phase 4) | ✅ |
-| Phoenix demo app with real SQLite queries and deliberate failures | ✅ |
-
-Not implemented: cloud service, dashboard, distributed tracing, implicit
-or cross-node propagation, automatic GenServer tracing, LiveView/Oban, log
-capture, automatic function tracing, AI analysis, a production database
-adapter. See [Roadmap](#roadmap).
-
-## Example
-
-`POST /api/checkout` in the demo app fails inside a database transaction.
-The client receives Phoenix's usual `{"errors":{"detail":"Internal Server Error"}}`
-plus an `x-traceguard-id` header. The stored report for that ID looks like
-this (abridged; the full real output is in
-[docs/sample_report.json](docs/sample_report.json)):
-
-```json
-{
-  "schema": "traceguard.report/v1",
-  "trace_id": "9a172de8c3a49cac179676daf5950dca",
-  "outcome": "exception",
-  "request": {
-    "method": "POST", "route": "/api/checkout",
-    "headers": {"authorization": "[REDACTED]", "x-api-key": "[REDACTED]", "user-agent": "curl/8.5.0", "...": "..."}
-  },
-  "response": {"status": 500},
-  "duration_us": 144384,
-  "events": [
-    {"seq": 1,  "process": "request", "offset_us": 25,     "name": "request.start"},
-    {"seq": 3,  "process": "request", "offset_us": 10684,  "name": "phoenix.router_dispatch.start", "metadata": {"plug": "TraceGuardDemoWeb.CheckoutController", "action": "create"}},
-    {"seq": 4,  "process": "request", "offset_us": 26715,  "name": "ecto.query", "metadata": {"sql": "begin"}},
-    {"seq": 5,  "process": "request", "offset_us": 40727,  "name": "ecto.query", "metadata": {"source": "products", "num_rows": 1, "origin": "TraceGuardDemo.Shop.-checkout/1-fun-0-/3 (lib/trace_guard_demo/shop.ex:117)"}},
-    {"seq": 7,  "process": "request", "offset_us": 99276,  "name": "ecto.query", "metadata": {"source": "orders", "sql": "INSERT INTO \"orders\" ..."}},
-    {"seq": 8,  "process": "request", "offset_us": 107705,  "name": "ecto.query", "metadata": {"sql": "rollback"}},
-    {"seq": 9,  "process": "request", "offset_us": 127893, "name": "phoenix.router_dispatch.exception", "outcome": "error"},
-    {"seq": 11, "process": "request", "offset_us": 144378, "name": "request.stop", "metadata": {"status": 500}}
-  ],
-  "failure": {
-    "kind": "error",
-    "exception": "TraceGuardDemo.Payments.GatewayError",
-    "message": "card processor returned HTTP 502 for a 9800 cent charge (merchant api_key=[REDACTED])",
-    "captured_by": "phoenix.router_dispatch.exception",
-    "stacktrace": [{"module": "TraceGuardDemo.Payments", "function": "charge/2", "file": "lib/trace_guard_demo/payments.ex", "line": 19}]
-  },
-  "tasks": null,
-  "redaction": {"applied": true, "redacted_values": 2, "scrubbed_message_values": 1},
-  "limitations": ["Only telemetry events emitted by the request-handling process, or by functions wrapped with TraceGuard.wrap/1, are included; ..."]
-}
-```
-
-(Timings are from the first checkout after the dev server started, so they
-include one-time code loading. Steady-state costs are in
-[docs/performance.md](docs/performance.md).)
-
-The request body (password, card number) was never captured. The
-`authorization` and `x-api-key` headers were captured only because the demo
-allow-lists them, and they are redacted. The merchant API key embedded in the
-exception message is scrubbed.
-
-## Installation
-
-TraceGuard is not published to Hex yet. Use a path or git dependency:
+Not yet on Hex. Use a path or git dependency:
 
 ```elixir
 # mix.exs
 {:trace_guard, path: "../trace_guard"}
+# or {:trace_guard, git: "https://github.com/HataluliRandima/trace_guard.git", ref: "<commit>"}
 ```
 
-Runtime dependencies: `telemetry`, `plug` and `jason`. Tested with Elixir
-1.17 / OTP 26, Phoenix 1.8.15, Plug 1.20.3, Ecto SQL 3.14 and Bandit 1.12.
-The `mix.exs` constraints allow Elixir ≥ 1.15 and Phoenix 1.7, which emit the
-same events, but those versions are untested.
-
-## Quick start
+## Configure (three lines)
 
 ```elixir
-# lib/my_app_web/endpoint.ex
+# lib/my_app_web/endpoint.ex: after Plug.RequestId, before Plug.Telemetry
 plug Plug.RequestId
-plug TraceGuard.Plug        # after RequestId, before Plug.Telemetry and the router
+plug TraceGuard.Plug
 plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
 # config/config.exs
-config :trace_guard, ecto_telemetry_prefixes: [[:my_app, :repo]]
+config :trace_guard, ecto_telemetry_prefixes: [[:my_app, :repo]]   # for MyApp.Repo
+```
+
+Everything else has conservative defaults: no request bodies, query strings,
+cookies, SQL text or SQL parameters. See
+[docs/configuration.md](docs/configuration.md).
+
+## End-to-end example
+
+```elixir
+# A controller action that fails after a query
+def show(conn, %{"id" => id}) do
+  order = Repo.get!(Order, id)
+  Payments.charge!(order)          # raises "payment provider rejected charge (api_key=demo_key_123)"
+  json(conn, order)
+end
+```
+
+```text
+$ curl -i localhost:4000/api/orders/7
+HTTP/1.1 500 Internal Server Error
+x-traceguard-id: 9a172de8c3a49cac179676daf5950dca
+{"errors":{"detail":"Internal Server Error"}}
 ```
 
 ```elixir
-TraceGuard.list_reports()                       # newest first
-{:ok, report} = TraceGuard.get_report(trace_id) # trace_id from the x-traceguard-id header
-{:ok, json} = TraceGuard.export_json(trace_id, pretty: true)
+iex> {:ok, report} = TraceGuard.await_report("9a172de8c3a49cac179676daf5950dca")
+iex> report["failure"]["message"]
+"payment provider rejected charge (api_key=[REDACTED])"
+iex> for e <- report["events"], do: {e["offset_us"], e["process"], e["name"]}
+[{25, "request", "request.start"}, {10684, "request", "phoenix.router_dispatch.start"},
+ {26715, "request", "ecto.query"}, ..., {127893, "request", "phoenix.router_dispatch.exception"}, ...]
+iex> TraceGuard.export_json("9a172de8c3a49cac179676daf5950dca", pretty: true)
+{:ok, "{\n  \"schema\": \"traceguard.report/v1\", ..."}
 ```
 
-Work moved into a `Task` or a GenServer is invisible unless you opt it in:
+(Abridged and illustrative.) Real, complete reports from the demo:
+[request failure](docs/sample_report.json),
+[failure in a Task](docs/sample_task_report.json),
+[failure in a traced GenServer call](docs/sample_server_report.json).
+
+## Retrieving reports
+
+| You have | Use |
+| --- | --- |
+| the `x-traceguard-id` response header | `TraceGuard.get_report(id)` or `TraceGuard.await_report(id, timeout)` |
+| no header (throws, exits, endpoint-plug failures) | the client's correlation ID (`incoming_header: "x-correlation-id"`), then `TraceGuard.list_reports(incoming_id: "...")`; or the request ID from your logs, `list_reports(request_id: ...)` |
+| a trace ID, and want to know what happened to its report | `TraceGuard.report_status(id)`: `:stored`, `{:dropped, reason}`, `:pending` or `:unknown` |
+| a report to share | `TraceGuard.export_json(id, pretty: true)` |
+
+Reports live in a bounded in-memory store by default, or in a SQLite file
+with the optional adapter ([docs/storage.md](docs/storage.md)). All lookups
+are node-local functions; TraceGuard serves nothing over HTTP.
+
+## Work outside the request process (opt-in)
 
 ```elixir
-Task.async(TraceGuard.wrap(fn -> Repo.all(Product) end))
-
-# in the GenServer module: use TraceGuard.Server
-TraceGuard.call(MyApp.Pricing, {:quote, sku, qty})
+Task.async(TraceGuard.wrap(fn -> Repo.all(Product) end))      # Task
+TraceGuard.call(MyApp.Pricing, {:quote, sku, qty})            # GenServer with `use TraceGuard.Server`
 ```
 
-See [docs/getting_started.md](docs/getting_started.md) for the full guide,
-[docs/task_propagation.md](docs/task_propagation.md) and
-[docs/genserver_propagation.md](docs/genserver_propagation.md) for the
-propagation contracts, and [docs/configuration.md](docs/configuration.md)
-for every option.
+Unwrapped Tasks, ordinary `GenServer.call/3`s, casts and a server's
+background work are never attributed to a request. See
+[task propagation](docs/task_propagation.md) and
+[GenServer propagation](docs/genserver_propagation.md) (experimental).
 
-## Running the demo
+## What is captured and what is redacted
 
-The demo is a small Phoenix API in [`demo/`](demo/) that depends on
-TraceGuard through a path dependency. It uses SQLite, so it doesn't need a
-database server.
+* **Captured:** method, route template, status, timings; Phoenix endpoint and
+  router events; Ecto query timing, table, row count, outcome and calling
+  function; allow-listed request headers; exception module, message and
+  stack frames (without arguments); opted-in Task and GenServer lifecycle
+  events.
+* **Never captured:** request bodies, query strings, cookies, SQL parameters,
+  result rows, Task or GenServer arguments, inspected throw values or exit
+  reasons.
+* **Redacted before storage or export:** values under sensitive keys
+  (`password`, `authorization`, `token`, `api_key`, `secret`, `cookie`, ...
+  and your `redact_keys`), recursively. Also labelled secrets in exception
+  messages (`api_key=…`, `Bearer …`).
+* **Not protected:** unlabelled secrets inside exception messages
+  (`capture_exception_message: false` turns messages off), and **your
+  application's own logs.**
+
+> ⚠️ **TraceGuard does not sanitize Phoenix, Plug, Bandit, Cowboy, Ecto or
+> OTP log output.** Those log raw exception messages, secrets included,
+> exactly as they would without TraceGuard. Verified: in the external
+> integration test, both Bandit's and Cowboy's crash logs contained the API
+> key that the TraceGuard report had redacted.
+
+Details: [docs/security.md](docs/security.md).
+
+## Reproduce the demo
 
 ```bash
 cd demo
-mix setup                    # deps, create + migrate SQLite DB, seed products
-mix phx.server               # http://localhost:4000
-
-# in another terminal
-cd demo
-./scripts/run_demo.sh report.json task_report.json
+mix setup && mix phx.server                  # http://localhost:4000
+./scripts/run_demo.sh a.json b.json c.json   # in another terminal
 ```
 
-The script calls the healthy endpoints and triggers the failing checkout
-with sensitive headers and body. It then triggers a failure inside a wrapped
-child task, exports both reports, and checks that none of the six sensitive
-test values appear in them. Details are in [demo/README.md](demo/README.md).
-
-## Running the benchmark
-
-```bash
-cd demo
-MIX_ENV=bench mix bench.requests                       # enabled vs disabled, paired alternating rounds
-MIX_ENV=bench mix run --no-start bench/event_cost.exs  # allocation per event
-MIX_ENV=bench mix run --no-start bench/phase4_costs.exs # propagation, storage, outage
-```
-
-Method, results and the proposed overhead budget are in
-[docs/performance.md](docs/performance.md). In short, on the reference
-laptop:
-
-* A successful request costs about 5–9 µs and 5.6 KB, plus about 1.1 KB per
-  recorded query event.
-* Building the report for a failed request costs about 0.7–0.9 ms and
-  218 KB on a quiet machine. That's down from about 2 ms and 842 KB in
-  Phase 1.
-* Handing a report to the store adds no measurable request-side cost.
-  Retaining it costs the store about 8–14 µs. At the defaults, the store
-  holds at most about 1.5 MB (typical reports) to 12 MB (near-worst case).
-* A traced GenServer call costs about 5 µs. The first propagation in a
-  request costs about 100 µs (starting the trace's collector).
-* The SQLite adapter commits a report in about 0.4 ms in its background
-  writer. Its queue stayed at the limit (50) during a locked-database outage.
-* The benchmark reports machine drift next to every delta. Latency on this
-  laptop is noisy; memory figures repeat exactly.
-
-## Running the tests
-
-```bash
-mix test                      # library: 142 tests + 1 doctest (real Phoenix endpoint, Task and GenServer processes, 3 storage adapters)
-(cd demo && mix test)         # demo: 16 tests, end-to-end with real Ecto/SQLite and real Bandit HTTP
-scripts/compat_matrix.sh      # library suite on several Elixir/OTP/dependency combinations
-mix format --check-formatted
-mix compile --warnings-as-errors
-```
-
-## Documentation
-
-* [Getting started](docs/getting_started.md)
-* [Configuration reference](docs/configuration.md)
-* [Architecture: event correlation and exception capture](docs/architecture.md)
-* [Task propagation](docs/task_propagation.md)
-* [GenServer propagation](docs/genserver_propagation.md)
-* [Compatibility: verified and untested combinations](docs/compatibility.md)
-* [Performance: benchmark method, results, overhead budget](docs/performance.md)
-* [Storage, overload and finding reports](docs/storage.md)
-* [Phase 2 review: lifecycle, bounds, security, interface changes](docs/phase2_review.md)
-* [Phase 3 review: storage inspection, overload guarantees, security, interface changes](docs/phase3_review.md)
-* [Phase 4 review: GenServer propagation, persistence, drop records, compatibility](docs/phase4_review.md)
-* Sample reports generated by `demo/scripts/run_demo.sh`:
-  [request failure](docs/sample_report.json), [failure in a child task](docs/sample_task_report.json),
-  [failure in a traced GenServer call](docs/sample_server_report.json)
+The script triggers three deliberate failures: in the request, in a Task,
+and in a GenServer call. It exports their reports and checks that none of
+seven planted secrets appear in them. See [demo/README.md](https://github.com/HataluliRandima/trace_guard/blob/main/demo/README.md).
 
 ## Limitations
 
-These are deliberate and documented:
+* **Only observable, attributable events.** Events must come from the
+  request process, a `wrap/1`ped function, or a `TraceGuard.Server`
+  callback during `TraceGuard.call/3`. No function tracing, no implicit
+  propagation, single node only.
+* **Some failures have no response header:** throws, exits and exceptions in
+  endpoint plugs. Use correlation IDs (above).
+* **Cowboy:** an exception raised in an *endpoint plug* (outside the router)
+  can go unreported, because Cowboy terminates the request process right
+  after the response, before TraceGuard can finish. This is reproduced by a
+  test that kills the request process at that point, but wasn't observed
+  under real Cowboy. Router failures,
+  including throws and exits, are reported. Cowboy's crash log doesn't carry
+  `trace_guard_id`. Current Cowboy needs OTP 27 or later.
+* **`debug_errors: true`:** failures outside the router are not reported.
+* **Exceptions after the response was sent** are not reported.
+* **Storage is local:** in memory (lost on restart), or SQLite for
+  development and testing. Under a burst, reports beyond
+  `max_pending_reports` are refused (and recorded as dropped), not queued.
+* **Untested:** PostgreSQL, Ecto SQL other than 3.14, macOS, Windows,
+  releases, multiple nodes, long-running load. See
+  [docs/compatibility.md](docs/compatibility.md).
+* **Performance** has been measured on one laptop only. Observations, not
+  guarantees, are in [docs/performance.md](docs/performance.md).
 
-* **Request process plus explicitly propagated work only.** Events are
-  attributed to a request only if they are emitted by the process that
-  handles it, by a function wrapped with `TraceGuard.wrap/1`, or by a
-  `TraceGuard.Server`'s `handle_call/3` during a `TraceGuard.call/3`. Plain
-  `Task`s, ordinary GenServer calls, casts, a server's background work, and
-  other nodes are not included, and task events
-  that arrive after the request completes are dropped. (Transactions are
-  fine: `Repo.transaction/2` runs its function in the calling process.)
-  Nothing is inferred from timing. See
-  [docs/task_propagation.md](docs/task_propagation.md#unsupported-cross-process-cases).
-* **Only observable events.** TraceGuard records Phoenix endpoint and router
-  events, `[:phoenix, :error_rendered]` and Ecto queries. It does not trace
-  function calls.
-* **Exceptions after the response is sent** (for example a controller that
-  calls `send_resp/3` and then raises) are not reported: the trace is already
-  complete when the exception happens.
-* **No response header for some failures.** For exceptions raised outside the
-  router (in an endpoint plug), and for `throw`/`exit` (including
-  `Task.await/2` on a crashed task), Phoenix renders the
-  error with the conn that entered the endpoint, so the `x-traceguard-id`
-  response header is missing. TraceGuard cannot add it there. The report is
-  still stored: find it by the client's correlation ID, the request ID or
-  trace ID from the log line, or by filters. See
-  [docs/storage.md](docs/storage.md#finding-a-report-without-a-response-header).
-* **With `debug_errors: true`**, failures outside the router are not reported,
-  because `Plug.Debugger` renders them and Phoenix then emits no
-  `error_rendered` event. Router failures (the common case) are reported.
-* **Exception messages** are the riskiest field. Labelled secrets
-  (`api_key=…`, `"password": "…"`, `Bearer …`) are scrubbed, but an unlabelled
-  secret cannot be recognized. Set `capture_exception_message: false` if your
-  exceptions may carry personal data.
-* **Your own logs are not sanitized.** TraceGuard's redaction applies only
-  to its own reports. Phoenix, Bandit, Ecto and your `Logger` calls still log
-  raw exception messages, secrets included. TraceGuard does not protect
-  secrets in any logging system.
-* **Linked tasks.** If a `Task.async` task crashes, the link kills the request
-  process before Phoenix can render an error, so no report is produced. Use
-  `Task.Supervisor.async_nolink/3` for work that may fail.
-* **Storage is local.** The default store is in memory and is lost on
-  restart. The SQLite adapter persists reports for development and testing:
-  one file, one writer, about 0.4 ms per report, no encryption at rest, and
-  not a production recommendation. Under a burst, reports beyond
-  `max_pending_reports` are refused, not queued. Submissions queued when a
-  store crashes are recorded as `{:dropped, :lost}`. Drop records live in
-  memory, are bounded, and expire; after that a trace reads as `:unknown`.
-* **Measured and verified on one machine.** Overhead figures come from one
-  laptop (WSL2) with SQLite, in-process. Latency deltas are noisy (the
-  benchmark shows the drift); allocation figures are reliable. The
-  compatibility matrix covers the library on four Elixir/OTP/dependency
-  rows; the demo ran on one. PostgreSQL, Cowboy, other Ecto versions,
-  macOS/Windows, releases, multiple nodes and long-running load are
-  untested.
+## Development
 
-## Roadmap
+```bash
+mix test                          # library (148 tests + 1 doctest)
+(cd demo && mix test)             # demo application (16 tests)
+scripts/compat_matrix.sh          # library on several Elixir/OTP/dependency versions
+scripts/external_smoke.sh         # a fresh Phoenix app integrating TraceGuard (Bandit/Cowboy x memory/SQLite)
+MIX_ENV=dev mix docs              # HexDocs-style documentation in doc/
+```
 
-* **Phase 1 (done):** the proof of concept.
-* **Phase 2 (done):** the benchmark and overhead budget, measured
-  optimizations, explicit `Task` propagation, and a lifecycle, bounds and
-  security review.
-* **Phase 3 (done):**
-  * bounded admission for the report store, with observable overload;
-  * honest storage outcomes, and reads that never exit;
-  * report discovery without a response header;
-  * the `TraceGuard.Storage` behaviour with a contract suite;
-  * paired, alternating benchmark rounds that show drift.
-* **Phase 4 (done):**
-  * explicit GenServer call propagation;
-  * a persistent SQLite adapter on the storage contract;
-  * a bounded drop record with `report_status/1`;
-  * the compatibility matrix and Phase 4 cost benchmarks.
-* **Phase 5 (proposed, not implemented):**
-  * a Cowboy and PostgreSQL verification run on a quiet, dedicated machine
-    (including the Ecto event shape on older `ecto_sql`);
-  * cheaper collector start for propagating requests (pooling or lazy
-    start);
-  * `cast` support for `TraceGuard.Server`;
-  * an ExDoc build and Hex release checklist.
-* **Later:** LiveView and Oban events, optional log capture, ExDoc and Hex
-  release, a local developer UI, OpenTelemetry interoperability.
+The release procedure is in [docs/release_checklist.md](docs/release_checklist.md),
+the history in [CHANGELOG.md](CHANGELOG.md), and design notes in
+[docs/architecture.md](docs/architecture.md) and the phase reviews.
 
 ## License
 
-TraceGuard is licensed under the [Apache License 2.0](LICENSE).
+Apache License 2.0. See [LICENSE](https://github.com/HataluliRandima/trace_guard/blob/main/LICENSE).

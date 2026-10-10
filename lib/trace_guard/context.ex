@@ -1,5 +1,8 @@
 defmodule TraceGuard.Context do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Request-local trace context.
 
   ## Correlation strategy
