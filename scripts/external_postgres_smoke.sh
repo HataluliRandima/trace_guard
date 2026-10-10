@@ -6,9 +6,11 @@
 #
 #   TRACE_GUARD_POSTGRES_URL=postgres://postgres@127.0.0.1:54329 scripts/external_postgres_smoke.sh
 #
-# 1. Add TraceGuard to the app's deps. The package isn't on Hex yet, so the
-#    dependency is the *built package* (`mix hex.build --unpack`), not this
-#    repository: only the files that would ship are available.
+# 1. Add TraceGuard to the app's deps. By default the dependency is the
+#    *built package* (`mix hex.build --unpack`), not this repository: only
+#    the files that would ship are available. TRACE_GUARD_DEP replaces it
+#    with any dependency options, for example the documented Git-tag form:
+#      TRACE_GUARD_DEP='github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"'
 # 2. Configure the adapter with the app's existing Repo.
 # 3. Start the app before migrating: TraceGuard must not create its table.
 # 4. Generate the migration (`mix trace_guard.gen.ecto_migration`): it must
@@ -51,11 +53,17 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "$WORK"
 
-echo "== 1. Install: TraceGuard as the app would get it (the built package)"
-(cd "$ROOT" && MIX_ENV=dev mix hex.build --unpack -o "$PKG" > "$WORK/hex_build.log" 2>&1) ||
-  die "mix hex.build failed (see $WORK/hex_build.log)"
-pass "package unpacked: $(cd "$PKG" && find . -type f | wc -l) files, no test/ or scripts/: $(
-  [ ! -e "$PKG/test" ] && [ ! -e "$PKG/scripts" ] && echo yes || echo NO)"
+if [ -n "${TRACE_GUARD_DEP:-}" ]; then
+  echo "== 1. Install: TraceGuard as {:trace_guard, $TRACE_GUARD_DEP}"
+  DEP="$TRACE_GUARD_DEP"
+else
+  echo "== 1. Install: TraceGuard as the app would get it (the built package)"
+  (cd "$ROOT" && MIX_ENV=dev mix hex.build --unpack -o "$PKG" > "$WORK/hex_build.log" 2>&1) ||
+    die "mix hex.build failed (see $WORK/hex_build.log)"
+  pass "package unpacked: $(cd "$PKG" && find . -type f | wc -l) files, no test/ or scripts/: $(
+    [ ! -e "$PKG/test" ] && [ ! -e "$PKG/scripts" ] && echo yes || echo NO)"
+  DEP="path: \"$PKG\""
+fi
 
 (cd "$WORK" && env -u ASDF_ELIXIR_VERSION -u ASDF_ERLANG_VERSION mix phx.new acme_pg --no-install \
   --database postgres --no-assets --no-html --no-dashboard --no-gettext --no-mailer --no-live \
@@ -63,11 +71,11 @@ pass "package unpacked: $(cd "$PKG" && find . -type f | wc -l) files, no test/ o
 rm -rf "$APP/.git"
 pass "fresh Phoenix app with --database postgres ($(grep -o '{:phoenix, "[^"]*"' "$APP/mix.exs"))"
 
-python3 -I - "$APP/mix.exs" "$PKG" <<'PY'
+python3 -I - "$APP/mix.exs" "$DEP" <<'PY'
 import sys
-p, pkg = sys.argv[1], sys.argv[2]
+p, dep = sys.argv[1], sys.argv[2]
 s = open(p).read()
-s = s.replace('{:bandit, "~> 1.5"}', '{:bandit, "~> 1.5"},\n      {:trace_guard, path: "%s"}' % pkg)
+s = s.replace('{:bandit, "~> 1.5"}', '{:bandit, "~> 1.5"},\n      {:trace_guard, %s}' % dep)
 open(p, "w").write(s)
 PY
 

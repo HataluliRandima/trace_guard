@@ -6,10 +6,17 @@ order, with timings), the work it did in Tasks and GenServer calls you opted
 in, the exception, and what TraceGuard could *not* see. It never changes the
 response or swallows the exception.
 
-**Status: 0.1.0-rc.1, release candidate, not on Hex.** Tested on four
-verified combinations from Elixir 1.15.8 / OTP 26 to Elixir 1.20.1 / OTP 29,
-with Phoenix 1.7.24 and 1.8.15, under Bandit and Cowboy. See
-[Limitations](#limitations) and [docs/compatibility.md](docs/compatibility.md).
+**Status: 0.1.0-rc.1, an experimental preview.** It's distributed as a
+GitHub pre-release (tag `v0.1.0-rc.1`), not on Hex. It isn't a promise of
+production stability: APIs marked experimental can change before 1.0, and
+there's no production use yet. Tested in CI on Elixir 1.15.8 / OTP 26 to
+Elixir 1.20.1 / OTP 29, Phoenix 1.7 and 1.8, Bandit and Cowboy, and
+PostgreSQL 16 and 18, on Linux only. See [Limitations](#limitations) and
+[docs/compatibility.md](docs/compatibility.md).
+
+Feedback is welcome, especially on integration friction, the database
+migration experience and compatibility:
+[open an issue](https://github.com/HataluliRandima/trace_guard/issues).
 
 ## Why not just logs or telemetry?
 
@@ -29,13 +36,21 @@ calls. It records the events listed in the report, nothing more.
 
 ## Install
 
-Not yet on Hex. Use a path or git dependency:
+From the Git tag (TraceGuard isn't on Hex):
 
 ```elixir
 # mix.exs
-{:trace_guard, path: "../trace_guard"}
-# or {:trace_guard, git: "https://github.com/HataluliRandima/trace_guard.git", ref: "<commit>"}
+{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"}
 ```
+
+```bash
+mix deps.get
+```
+
+`mix.lock` then records the exact commit, so later builds can't change
+underneath you. For the optional adapters, see [Storage](#retrieving-reports):
+SQLite needs `{:exqlite, "~> 0.42"}`; Ecto/PostgreSQL uses the `ecto_sql`
+and `postgrex` your application already has.
 
 ## Configure (three lines)
 
@@ -96,18 +111,26 @@ iex> TraceGuard.export_json("9a172de8c3a49cac179676daf5950dca", pretty: true)
 | a trace ID, and want to know what happened to its report | `TraceGuard.report_status(id)`: `:stored`, `{:dropped, reason}`, `:pending` or `:unknown` |
 | a report to share | `TraceGuard.export_json(id, pretty: true)` |
 
-Reports live in a bounded in-memory store by default. Two optional
-adapters persist them:
+Where reports are kept:
 
-* **your application's PostgreSQL**, through your existing Ecto Repo (no
-  second Repo or database):
-  `config :trace_guard, storage: {TraceGuard.Storage.Ecto, repo: MyApp.Repo}`,
-  then `mix trace_guard.gen.ecto_migration && mix ecto.migrate`. This is
-  experimental;
-* **a SQLite file**, for development and testing.
+| Storage | Use it for | Survives restarts | Needs |
+| --- | --- | --- | --- |
+| **Memory** (default) | trying TraceGuard, development, apps that only need recent failures | no | nothing |
+| **SQLite** | local development and tests where reports should outlive a restart | yes | `{:exqlite, "~> 0.42"}` and a file path |
+| **Ecto/PostgreSQL** (experimental) | apps already on PostgreSQL that want reports in their own database | yes | your existing Repo, plus an explicit migration |
 
-See [docs/storage.md](docs/storage.md) for which to choose. All lookups are
-node-local functions; TraceGuard serves nothing over HTTP.
+The Ecto adapter uses **your existing Repo** (no second Repo, pool or
+database):
+`config :trace_guard, storage: {TraceGuard.Storage.Ecto, repo: MyApp.Repo}`.
+Its table comes from a migration you generate and run yourself:
+`mix trace_guard.gen.ecto_migration && mix ecto.migrate`. **TraceGuard never
+runs migrations or changes your schema on its own.**
+
+Storage is bounded on purpose. A burst beyond `max_pending_reports`, or a
+storage failure (a database outage, a missing table), **drops reports**,
+and each drop is recorded (`report_status/1`, `report_stats/0`, telemetry).
+See [docs/storage.md](docs/storage.md). All lookups are node-local
+functions; TraceGuard serves nothing over HTTP.
 
 ## Work outside the request process (opt-in)
 

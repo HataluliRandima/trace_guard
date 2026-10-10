@@ -9,30 +9,51 @@ Two GitHub Actions workflows run the same scripts as the local procedure.
 Every job must pass; none uses `continue-on-error`. Toolchains are exact
 (`version-type: strict`), runners are `ubuntu-24.04`, and third-party
 actions are pinned by commit SHA. PostgreSQL runs as a CI service container
-(`postgres:16`, `postgres:18`) with trust authentication, so no credential
-exists in the repository or in CI secrets.
+with trust authentication, so no credential exists in the repository or in
+CI secrets.
+
+**Version policy (Phase 8).** Required CI is reproducible: it pins exact
+toolchains, `mix.lock` and exact PostgreSQL minors (`postgres:16.15`,
+`postgres:18.6`), so a pull request's result changes only with its code.
+The weekly Compatibility workflow floats on purpose: PostgreSQL major
+tags (`postgres:16`, `postgres:18`, so the latest minors), fresh
+dependency resolution, and `mix hex.audit` for retired packages.
+
+* **Red weekly, green required:** something changed upstream. Fix it or
+  tighten a constraint, then bump the pins in `ci.yml` in their own pull
+  request.
+* **Minors** are bumped deliberately, roughly when PostgreSQL ships them
+  (quarterly).
+* **Digests** (`@sha256:`) aren't pinned: the official images rebuild the
+  same minor tag for OS updates, and stale digests would miss them.
+* **Exception:** the clean-install job resolves its generated app's
+  dependencies fresh, as a new user's would. It prints the resolved
+  versions so a break can be traced upstream.
 
 **`ci.yml`: every pull request, and pushes to `main` and `phase*`:**
 
 | Job | Toolchain | What it checks |
 | --- | --- | --- |
-| Library checks | Elixir 1.17.0 / OTP 26.1.2 | lock file current and minimal, formatting, warnings-as-errors compile (dev, test), tests and doctest without PostgreSQL, ExDoc with warnings as errors, `scripts/package_check.sh`, `mix hex.audit` |
+| Library checks | Elixir 1.17.0 / OTP 26.1.2 | lock file current and minimal, formatting, warnings-as-errors compile (dev, test), tests and doctest without PostgreSQL, ExDoc with warnings as errors, `scripts/package_check.sh` |
 | Demo application | same | formatting, warnings-as-errors compile (dev, bench), tests |
-| PostgreSQL 16 and PostgreSQL 18 | same | the full suite including the real PostgreSQL tests; fails if any are excluded or if the server isn't the expected major version |
-| Minimum toolchain | Elixir 1.15.8 / OTP 26.1.2 | compatibility row "minimum" (fresh resolution: Phoenix 1.7, Plug 1.14, Telemetry 1.0, `ecto_sql` 3.10, `postgrex` 0.17) against PostgreSQL 16 |
-| Clean install | Elixir 1.17.0 / OTP 26.1.2, `phx_new` 1.8.8 | `scripts/external_postgres_smoke.sh` (fresh Phoenix app on PostgreSQL 16) and `scripts/no_ecto_smoke.sh` (fresh Phoenix app without Ecto) |
+| PostgreSQL 16.15 and PostgreSQL 18.6 | same | the full suite including the real PostgreSQL tests; fails if any are excluded or if the server isn't exactly the pinned version |
+| Minimum toolchain | Elixir 1.15.8 / OTP 26.1.2 | compatibility row "minimum" (fresh resolution: Phoenix 1.7, Plug 1.14, Telemetry 1.0, `ecto_sql` 3.10, `postgrex` 0.17) against PostgreSQL 16.15 |
+| Clean install | Elixir 1.17.0 / OTP 26.1.2, `phx_new` 1.8.8 | `scripts/external_postgres_smoke.sh` (fresh Phoenix app on PostgreSQL 16.15) and `scripts/no_ecto_smoke.sh` (fresh Phoenix app without Ecto) |
 
 **`compat.yml`: weekly (Mondays) and on demand:** rows "current"
 (fresh resolution instead of the lock file, PostgreSQL 16),
 "elixir117-otp27" (PostgreSQL 16) and "latest" (Elixir 1.20.1 / OTP 29.0,
-PostgreSQL 18), plus `scripts/external_smoke.sh` with Bandit and Cowboy ×
-memory and SQLite on Elixir 1.17.1 / OTP 27.0.
+PostgreSQL 18), on the floating major tags; `scripts/external_smoke.sh`
+with Bandit and Cowboy × memory and SQLite on Elixir 1.17.1 / OTP 27.0; and
+`mix hex.audit` on the locked dependencies.
 
-**Status:** `ci.yml` first ran on GitHub for `882fc9a`
+**Status (remote runs; each tested only its own commit):** `ci.yml` first ran on GitHub for `882fc9a`
 ([run 38040243638](https://github.com/HataluliRandima/trace_guard/actions/runs/38040243638)), and all six jobs succeeded,
 including PostgreSQL 16 and 18 with nothing excluded. `compat.yml` ran
 manually for the same commit ([run 38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035)): all four jobs
-succeeded. Before that, both workflows were linted (`actionlint`
+succeeded. Both runs predate the Phase 8 workflow changes (pinned
+minors, the audit job), which haven't run on GitHub yet. Before the first
+runs, both workflows were linted (`actionlint`
 with `shellcheck`), and every job's `run:` steps were executed locally with
 the job's exact toolchain (see the table below).
 

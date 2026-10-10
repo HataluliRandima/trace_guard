@@ -104,11 +104,28 @@ What TraceGuard captures, what it protects, and what it does **not**.
   `report_status/1`. TraceGuard logs nothing per dropped report, so a
   failure storm can't become a log storm.
 
+## Installing from the Git tag (0.1.0-rc.1)
+
+* **A Git tag is mutable on GitHub.** The maintainer could move it, though
+  this project's policy is never to (a fix becomes `v0.1.0-rc.2`). Mix
+  records the resolved commit in your `mix.lock`, and later builds use that
+  commit. To pin explicitly, use `ref: "<commit sha>"` instead of `tag:`.
+* **A Git dependency fetches the whole repository**, not just `lib/`:
+  tests, the demo, scripts and docs. Only `lib/` is compiled into your
+  application. The only secrets anywhere in the repository are fake values
+  planted by the tests.
+* **Dropped reports are expected under pressure.** Queue saturation and
+  storage failures drop diagnostic reports, and record each drop (see
+  [storage.md](storage.md)). Don't rely on TraceGuard as an audit log.
+
 ## Continuous integration (Phase 7)
 
 * Workflows have `permissions: contents: read` and use no secrets. Nothing
   in CI can publish, tag or push.
 * Third-party actions are pinned to commit SHAs (the tag is in a comment).
+  Required CI pins PostgreSQL images to exact minor tags; the weekly
+  workflow uses the floating major tags (Phase 8, see
+  [compatibility.md](compatibility.md)).
 * PostgreSQL runs as a per-job service container with trust
   authentication, reachable only from the job's runner. There is no
   password to commit or leak.
