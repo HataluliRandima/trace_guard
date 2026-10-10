@@ -6,7 +6,7 @@ security after adding Task propagation.
 
 ## Request lifecycle (as audited, still valid)
 
-1. **Create.** `TraceGuard.Plug.call/2` generates a 128-bit trace ID and puts
+1. **Create.** `TraceGuard.Plug`'s `call/2` generates a 128-bit trace ID and puts
    a `%TraceGuard.Context{role: :request}` in the request process's
    dictionary. It replaces any stale context left by an earlier request in
    the same process; Phase 2 also stops a stale context's task collector.

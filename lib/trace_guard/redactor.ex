@@ -1,5 +1,8 @@
 defmodule TraceGuard.Redactor do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Recursive, key-based redaction of diagnostic data.
 
   ## Key matching

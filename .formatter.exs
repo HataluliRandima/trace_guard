@@ -10,6 +10,11 @@
     pipe_through: 1,
     scope: 2,
     scope: 3,
-    get: 3
+    get: 3,
+    # Ecto.Migration DSL (TraceGuard.Storage.Ecto.Migration)
+    add: 2,
+    add: 3,
+    create: 1,
+    create: 2
   ]
 ]

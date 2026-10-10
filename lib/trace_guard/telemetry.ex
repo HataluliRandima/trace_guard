@@ -1,5 +1,8 @@
 defmodule TraceGuard.Telemetry do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Attaches TraceGuard's handlers to selected `:telemetry` events.
 
   | Telemetry event                              | Timeline event                    |
@@ -156,17 +159,19 @@ defmodule TraceGuard.Telemetry do
     )
 
     EventCollector.put_failure(failure)
+    complete_unwrapped(kind)
   end
 
   ## Phoenix error rendering
   #
   # Phoenix.Endpoint.RenderErrors sends the error response *before* emitting
-  # this event. For exceptions raised inside the router, TraceGuard.Plug's
-  # before_send callback has therefore already completed the trace and there
-  # is no context left here. This handler only acts when the exception was
-  # raised outside the router (e.g. in an endpoint plug after
-  # TraceGuard.Plug): RenderErrors then renders with the conn that entered the
-  # endpoint, so no before_send callback registered later ever runs.
+  # this event. For exceptions raised inside the router, the trace is already
+  # complete (TraceGuard.Plug's before_send for :error; the router exception
+  # handler above for throw/exit), so there is no context left here. This
+  # handler only acts when the exception was raised outside the router (e.g.
+  # in an endpoint plug after TraceGuard.Plug). It runs after the response
+  # was sent, so under Cowboy, which terminates the request process once the
+  # response is complete, it may not get to finish (documented limitation).
 
   defp handle([:phoenix, :error_rendered], _measurements, metadata) do
     %{kind: kind, reason: reason, stacktrace: stacktrace, status: status} = metadata
@@ -264,6 +269,26 @@ defmodule TraceGuard.Telemetry do
       _ -> false
     end
   end
+
+  # Plug wraps only :error exceptions in Plug.Conn.WrapperError, so for a
+  # throw or an exit Phoenix renders the 500 with the conn that entered the
+  # endpoint and TraceGuard.Plug's before_send never runs. The only later
+  # signal, [:phoenix, :error_rendered], fires *after* the response is sent,
+  # and Cowboy terminates the request process once its response is complete
+  # (`exit(Pid, shutdown)`), so work done then can be cut short and the
+  # report lost. Phoenix always renders throws and exits as 500
+  # (Phoenix.Endpoint.RenderErrors), so the trace is completed here, before
+  # anything is sent.
+  defp complete_unwrapped(kind) when kind in [:throw, :exit] do
+    EventCollector.record("request.stop", "request", %{status: 500},
+      lifecycle: true,
+      outcome: "error"
+    )
+
+    EventCollector.finish(500)
+  end
+
+  defp complete_unwrapped(_kind), do: :ok
 
   ## Helpers
 

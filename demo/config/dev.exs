@@ -51,6 +51,15 @@ config :trace_guard_demo, TraceGuardDemoWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :trace_guard_demo, dev_routes: true
 
+# TRACE_GUARD_STORAGE=sqlite mix phx.server keeps reports in a SQLite file
+# that survives restarts (TraceGuard.Storage.SQLite). Default: in memory.
+if System.get_env("TRACE_GUARD_STORAGE") == "sqlite" do
+  config :trace_guard,
+    storage:
+      {TraceGuard.Storage.SQLite,
+       database: Path.expand("../trace_guard_reports_dev.db", __DIR__), max_age: 86_400_000}
+end
+
 # Exposes GET /dev/traces and /dev/traces/:trace_id.
 config :trace_guard_demo, expose_trace_reports: true
 

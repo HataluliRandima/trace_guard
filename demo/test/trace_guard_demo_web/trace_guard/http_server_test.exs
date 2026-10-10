@@ -70,6 +70,21 @@ defmodule TraceGuardDemoWeb.HttpServerTest do
     assert reconcile["tasks"]["processes"] == 2
     assert Enum.any?(reconcile["events"], &(&1["name"] == "task.exception"))
 
+    # GenServer propagation under Bandit: the server's crash is in the report.
+    product!(%{sku: "TG-002", name: "Span Wrench", price_cents: 1_250, stock: 5})
+
+    Ecto.Adapters.SQL.Sandbox.allow(
+      TraceGuardDemo.Repo,
+      self(),
+      Process.whereis(TraceGuardDemo.Pricing)
+    )
+
+    {500, _, _} =
+      request(:post, base <> "/api/quote", [], Jason.encode!(%{sku: "TG-002", qty: 1}))
+
+    quote_report = fetch_report_for_route!("/api/quote")
+    assert Enum.any?(quote_report["events"], &(&1["name"] == "genserver.call.exception"))
+
     # The dev endpoint serves the same report over HTTP.
     {200, _, served} = request(:get, base <> "/dev/traces/" <> first)
     assert Jason.decode!(served)["trace_id"] == first

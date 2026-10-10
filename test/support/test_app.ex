@@ -208,6 +208,34 @@ defmodule TraceGuard.TestApp.Controller do
     json(conn, %{ok: true})
   end
 
+  ## GenServer propagation
+
+  @pricing TraceGuard.TestApp.PricingServer
+
+  def server_quote(conn, %{"tag" => tag}) do
+    {:ok, _} = TraceGuard.call(@pricing, {:quote, "#{tag}_server", "password=hunter2"})
+    TestApp.emit_query("#{tag}_request")
+    send_resp(conn, 500, "quoted")
+  end
+
+  def server_fail(_conn, _params), do: TraceGuard.call(@pricing, {:fail, "before_server_crash"})
+
+  def server_timeout(_conn, %{"ms" => ms}) do
+    TraceGuard.call(@pricing, {:block, self()}, String.to_integer(ms))
+  end
+
+  def server_nested(conn, _params) do
+    {:ok, _} =
+      TraceGuard.call(@pricing, {:nested, TraceGuard.TestApp.InnerPricing, "n"})
+
+    send_resp(conn, 500, "nested")
+  end
+
+  def server_reply_later(conn, _params) do
+    {:ok, :later} = TraceGuard.call(@pricing, {:reply_later, "d"})
+    send_resp(conn, 500, "deferred")
+  end
+
   def send_then_crash(conn, _params) do
     conn = send_resp(conn, 200, "sent")
     raise TestApp.BoomError, message: "after send"
@@ -242,6 +270,11 @@ defmodule TraceGuard.TestApp.Router do
     get "/tasks/late", Controller, :tasks_late
     get "/tasks/flood/:n", Controller, :tasks_flood
     get "/tasks/ok", Controller, :tasks_ok
+    get "/server/quote/:tag", Controller, :server_quote
+    get "/server/fail", Controller, :server_fail
+    get "/server/timeout/:ms", Controller, :server_timeout
+    get "/server/nested", Controller, :server_nested
+    get "/server/reply_later", Controller, :server_reply_later
   end
 end
 

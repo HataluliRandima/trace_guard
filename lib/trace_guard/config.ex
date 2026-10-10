@@ -1,5 +1,8 @@
 defmodule TraceGuard.Config do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Validated TraceGuard configuration.
 
   Configuration is read from the `:trace_guard` application environment when
@@ -39,7 +42,9 @@ defmodule TraceGuard.Config do
     task_drain_timeout: 100,
     task_collector_lifetime: 300_000,
     storage: TraceGuard.ReportStore,
-    max_pending_reports: 50
+    max_pending_reports: 50,
+    max_drop_records: 1_000,
+    drop_record_ttl: 600_000
   ]
 
   @key :"$trace_guard_config"
@@ -64,7 +69,9 @@ defmodule TraceGuard.Config do
           task_drain_timeout: non_neg_integer(),
           task_collector_lifetime: pos_integer(),
           storage: module() | {module(), keyword()},
-          max_pending_reports: pos_integer()
+          max_pending_reports: pos_integer(),
+          max_drop_records: pos_integer(),
+          drop_record_ttl: pos_integer()
         }
 
   defstruct Keyword.keys(@defaults)
@@ -150,7 +157,9 @@ defmodule TraceGuard.Config do
       task_drain_timeout: non_neg_integer!(merged, :task_drain_timeout),
       task_collector_lifetime: pos_integer!(merged, :task_collector_lifetime),
       storage: storage!(merged),
-      max_pending_reports: pos_integer!(merged, :max_pending_reports)
+      max_pending_reports: pos_integer!(merged, :max_pending_reports),
+      max_drop_records: pos_integer!(merged, :max_drop_records),
+      drop_record_ttl: pos_integer!(merged, :drop_record_ttl)
     }
   end
 

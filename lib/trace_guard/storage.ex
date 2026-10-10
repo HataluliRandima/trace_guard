@@ -1,5 +1,7 @@
 defmodule TraceGuard.Storage do
   @moduledoc """
+  **Experimental in 0.1.0-rc.1** (the storage behaviour): the API may change before 1.0.
+
   Where finished reports go: a small behaviour plus the facade that the
   tracing engine and the public API call.
 
@@ -65,7 +67,17 @@ defmodule TraceGuard.Storage do
   @callback clear(keyword()) :: :ok | {:error, :unavailable}
   @callback stats(keyword()) :: map()
 
-  @optional_callbacks child_spec: 1
+  @doc """
+  Optional (Phase 6): summaries matching every `{field, value}` criterion
+  exactly (fields are summary keys such as `"incoming_id"`), newest first.
+  Lets an adapter filter in its database instead of returning every summary.
+  The facade re-applies the criteria to whatever is returned, so an adapter
+  can narrow results but never widen them.
+  """
+  @callback list_matching([{String.t(), term()}], keyword()) ::
+              [summary()] | {:error, :unavailable}
+
+  @optional_callbacks child_spec: 1, list_matching: 2
 
   @counters [:submitted, :accepted, :stored, :dropped_overloaded, :dropped_other, :lost]
   @counters_key {__MODULE__, :counters}
@@ -84,6 +96,10 @@ defmodule TraceGuard.Storage do
     {adapter, opts} = adapter()
     count(:submitted)
 
+    # Marked pending *before* the adapter can store it, so a fast store
+    # cannot resolve the mark before it exists.
+    TraceGuard.DropLog.pending(trace_id, adapter)
+
     result =
       try do
         adapter.put(report, opts)
@@ -98,6 +114,7 @@ defmodule TraceGuard.Storage do
         result
 
       {:ok, :queued} ->
+        # Stays pending until the adapter calls stored/1 or dropped/2.
         count(:accepted)
         result
 
@@ -121,6 +138,30 @@ defmodule TraceGuard.Storage do
   @doc "Lists report summaries from the configured adapter, newest first."
   @spec list() :: [summary()] | {:error, :unavailable}
   def list, do: safely(:list, [], {:error, :unavailable})
+
+  @doc """
+  Summaries matching all `{field, value}` criteria exactly, newest first.
+  Uses the adapter's `c:list_matching/2` when it has one, else `c:list/1`.
+  """
+  @spec list_matching([{String.t(), term()}]) :: [summary()] | {:error, :unavailable}
+  def list_matching(criteria) do
+    {adapter, _opts} = adapter()
+
+    result =
+      if criteria != [] and function_exported?(adapter, :list_matching, 2),
+        do: safely(:list_matching, [criteria], {:error, :unavailable}),
+        else: list()
+
+    case result do
+      summaries when is_list(summaries) ->
+        Enum.filter(summaries, fn summary ->
+          Enum.all?(criteria, fn {field, value} -> summary[field] == value end)
+        end)
+
+      error ->
+        error
+    end
+  end
 
   @doc "Deletes one report."
   @spec delete(String.t()) :: :ok | {:error, :unavailable}
@@ -166,6 +207,7 @@ defmodule TraceGuard.Storage do
   @spec stored(report()) :: :ok
   def stored(%{"trace_id" => trace_id} = report) do
     count(:stored)
+    TraceGuard.DropLog.resolve(trace_id)
 
     :telemetry.execute([:trace_guard, :report, :stored], %{}, %{
       trace_id: trace_id,
@@ -181,6 +223,7 @@ defmodule TraceGuard.Storage do
   @spec dropped(String.t(), term()) :: :ok
   def dropped(trace_id, reason) do
     count(if reason == :overloaded, do: :dropped_overloaded, else: :dropped_other)
+    TraceGuard.DropLog.record_drop(trace_id, reason)
 
     :telemetry.execute([:trace_guard, :report, :dropped], %{}, %{
       trace_id: trace_id,
@@ -195,6 +238,19 @@ defmodule TraceGuard.Storage do
   """
   @spec lost(pos_integer()) :: :ok
   def lost(n) when is_integer(n) and n > 0, do: :counters.add(counters(), index(:lost), n)
+
+  @doc """
+  For a queueing adapter starting (or restarting): submissions still marked
+  pending for `adapter` died with its previous incarnation. Each is recorded
+  as a drop with reason `:lost` (so `TraceGuard.report_status/1` can say
+  so) and counted in `:lost`. Returns the number.
+  """
+  @spec lost_pending(module()) :: non_neg_integer()
+  def lost_pending(adapter) do
+    n = TraceGuard.DropLog.lost_pending(adapter)
+    if n > 0, do: lost(n)
+    n
+  end
 
   @doc """
   The summary of a report used by `list/0` and discovery filters. Built only

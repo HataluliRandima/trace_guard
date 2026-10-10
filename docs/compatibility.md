@@ -1,0 +1,139 @@
+# Compatibility
+
+"Supported" here means **verified by running the checks**, not merely
+allowed by the version constraints in `mix.exs`.
+
+## Verified (Phase 6)
+
+`scripts/compat_matrix.sh` copies the library into a scratch directory,
+pins the dependency requirements there, resolves them from scratch (no lock
+file), and runs `mix deps.get`, `mix compile --warnings-as-errors` and the
+full test suite. With `TRACE_GUARD_POSTGRES_URL` set, that suite includes the
+**real PostgreSQL suite** for `TraceGuard.Storage.Ecto`: 171 tests + 1
+doctest in total, covering real Phoenix requests, Task and GenServer
+propagation, and all four storage adapters.
+
+| Row | Elixir | OTP | Phoenix (test) | Plug | Telemetry | Exqlite | Ecto SQL / Postgrex | Result (PostgreSQL 16.15) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| minimum | 1.15.8 | 26.1.2 | 1.7.24 | 1.14.2 | 1.0.0 | 0.42.0 | **3.10.2 / 0.17.5** | ✅ 171 tests + 1 doctest, 0 failures |
+| current (lock file) | 1.17.0 | 26.1.2 | 1.8.15 | 1.20.3 | 1.4.2 | 0.42.0 | 3.14.0 / 0.22.4 | ✅ |
+| Elixir 1.17 on OTP 27 | 1.17.1 | 27.0 | 1.8.15 | 1.20.3 | 1.4.2 | 0.42.0 | 3.12.1 / 0.22.4 | ✅ |
+| latest | 1.20.1 | 29.0 | 1.8.15 | 1.20.3 | 1.4.2 | 0.42.0 | 3.14.0 / 0.22.4 | ✅ |
+
+Jason resolved to 1.4.5 in every row.
+
+**PostgreSQL:** 16.15 only (Ubuntu's package, run user-locally with
+`scripts/local_postgres.sh`, TCP on localhost). Other PostgreSQL versions
+are untested; the adapter uses `jsonb`, `bigserial`, `ON CONFLICT` and
+`COMMENT ON`, all available since PostgreSQL 9.5, but that isn't verified.
+
+The demo application (Ecto SQL 3.14 on SQLite, Bandit 1.12) and its 16 tests
+were run on the "current" row only.
+
+Reproduce it with:
+
+```bash
+eval "$(scripts/local_postgres.sh start | tail -1)"  # or any PostgreSQL: TRACE_GUARD_POSTGRES_URL=...
+scripts/compat_matrix.sh                            # all rows
+ROWS="minimum latest" scripts/compat_matrix.sh      # selected rows
+```
+
+Without `TRACE_GUARD_POSTGRES_URL`, the PostgreSQL suite is excluded, and
+the script says so in its summary. Such a run doesn't verify the Ecto
+adapter. The script needs asdf with the listed versions and access to
+hex.pm.
+
+## External PostgreSQL application (Phase 6)
+
+`scripts/external_postgres_smoke.sh` generates a fresh Phoenix app with
+`--database postgres` (its own `AcmePg.Repo`, `acme_pg_dev` and
+`acme_pg_test` databases). It configures
+`storage: {TraceGuard.Storage.Ecto, repo: AcmePg.Repo}`, generates
+TraceGuard's migration with `mix trace_guard.gen.ecto_migration`, and runs
+it with the app's own `mix ecto.migrate`. Result (Elixir 1.17.0 / OTP 26,
+PostgreSQL 16.15):
+
+* the app's own test suite over real HTTP (Bandit): ✅ 5 tests, 0
+  failures. This covers an ordinary request being unchanged, a failure's
+  report stored redacted in the app's database (raw row scan for the planted
+  secrets), and `Ecto.Repo.all_running() == [AcmePg.Repo]`;
+* **two-VM restart:** VM 1 (`mix phx.server`) served a failing request; a
+  separate VM (`mix run`) read the report back from PostgreSQL
+  (`report_status/1` → `:stored`), with only `AcmePg.Repo` running;
+* the server's databases afterwards: only `acme_pg_dev` and `acme_pg_test`.
+  TraceGuard created none.
+
+## External integration (Phase 5)
+
+`scripts/external_smoke.sh` generates a brand-new Phoenix application with
+`mix phx.new` (SQLite, no HTML or assets), outside this repository and not
+derived from the demo. It then:
+
+* adds TraceGuard as a path dependency;
+* configures it with documented options only;
+* installs `TraceGuard.Plug`;
+* adds a controller that fails after an Ecto query and a wrapped Task, and a
+  `use TraceGuard.Server` GenServer that crashes;
+* runs the new app's own test suite over **real HTTP** against the running
+  endpoint.
+
+The tests use only `TraceGuard`'s public functions: `await_report/2`,
+`report_status/1`, `export_json/2`, `list_reports/1`, `report_stats/0`,
+`clear_reports/0`, `wrap/1` and `call/3`.
+
+| Toolchain | HTTP adapter | Storage | Result |
+| --- | --- | --- | --- |
+| Elixir 1.17.0 / OTP 26.1.2 | Bandit 1.12 | in memory | ✅ 6 tests, 0 failures |
+| Elixir 1.17.0 / OTP 26.1.2 | Bandit 1.12 | SQLite | ✅ 6 tests, 0 failures |
+| Elixir 1.17.1 / OTP 27.0 | Bandit 1.12 | in memory | ✅ 6 tests, 0 failures |
+| Elixir 1.17.1 / OTP 27.0 | Bandit 1.12 | SQLite | ✅ 6 tests, 0 failures |
+| Elixir 1.17.1 / OTP 27.0 | Cowboy 2.20 (`plug_cowboy` 2.9) | in memory | ✅ 6 tests, 0 failures (5 further runs: 5 passed) |
+| Elixir 1.17.1 / OTP 27.0 | Cowboy 2.20 (`plug_cowboy` 2.9) | SQLite | ✅ 6 tests, 0 failures (5 further runs: 5 passed) |
+
+The generated app also started as a normal dev server (`mix phx.server`),
+and a real failing request returned Phoenix's generic 500 with an
+`x-traceguard-id` header.
+
+What the external run found and changed:
+
+* **Cowboy lost reports for throws and exits** (3 of 4 runs) until Phase 5
+  completed those traces before rendering. See
+  [architecture.md](architecture.md).
+* **Cowboy 2.20 / cowlib 2.21 need OTP 27+**: cowlib uses `maybe`
+  expressions, which don't compile on OTP 26. This is a constraint of
+  Cowboy, not TraceGuard.
+* **Log discovery differs by adapter.** Bandit's crash log carries
+  `trace_guard_id`; Cowboy's doesn't. Both contain the raw secret that the
+  report redacted.
+* **SQLite file permissions** were `0644` and are now `0600`.
+
+## Declared requirements
+
+| Dependency | Requirement | Lowest verified | Notes |
+| --- | --- | --- | --- |
+| Elixir | `~> 1.15` | 1.15.8 | |
+| OTP | (via Elixir) | 26.1.2 | 27.0 and 29.0 also verified. |
+| `plug` | `~> 1.14` | 1.14.2 | |
+| `telemetry` | `~> 1.0` | 1.0.0 | |
+| `jason` | `~> 1.4` | 1.4.5 | Every row resolved 1.4.5; 1.4.0–1.4.4 are untested. |
+| `phoenix` | `~> 1.7` (tests only) | 1.7.24 | TraceGuard has no runtime dependency on Phoenix; it relies on Phoenix's telemetry events and error rendering, verified on 1.7.24 and 1.8.15. |
+| `exqlite` | `~> 0.42`, **optional** | 0.42.0 | Only for `TraceGuard.Storage.SQLite`. The `~>` requirement allows later 0.x releases, which are untested. |
+| `ecto_sql` | `~> 3.10`, **optional** | 3.10.2 | Only for `TraceGuard.Storage.Ecto` (3.10.2, 3.12.1 and 3.14.0 verified with PostgreSQL 16). TraceGuard also consumes Ecto SQL's `[..., :query]` telemetry events (verified with SQLite and PostgreSQL). |
+| `postgrex` | none (from your app) | 0.17.5 | Test-only dependency of TraceGuard; 0.17.5 and 0.22.4 verified. |
+
+## Not tested (outstanding)
+
+* **PostgreSQL versions other than 16**, managed or remote PostgreSQL
+  (TLS, poolers such as PgBouncer in transaction mode), MySQL and other Ecto
+  adapters. The Ecto adapter refuses non-PostgreSQL repos.
+* **Cowboy on OTP 26** (current Cowboy doesn't compile there), and older
+  Cowboy versions.
+* **Elixir 1.16, 1.18, 1.19** and **OTP 25, 28.**
+* **Operating systems other than Linux under WSL2.** macOS, Windows and
+  native Linux are untested; the SQLite adapter's file handling is the most
+  likely place for differences.
+* **Releases** (`mix release`, embedded mode) and hot code upgrades.
+* **Multiple nodes.** Propagation is node-local by design; calling a remote
+  server with `TraceGuard.call/3` runs the callback untraced. Nothing else
+  about distribution is tested.
+* **Long-running load and memory growth over hours.**

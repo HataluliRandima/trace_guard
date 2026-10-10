@@ -10,6 +10,14 @@ defmodule TraceGuardDemoWeb.DiagnosticsTest do
 
   setup do
     TraceGuard.clear_reports()
+    # The pricing server queries from its own process; let it use this
+    # test's sandboxed connection.
+    Ecto.Adapters.SQL.Sandbox.allow(
+      TraceGuardDemo.Repo,
+      self(),
+      Process.whereis(TraceGuardDemo.Pricing)
+    )
+
     %{product: product!()}
   end
 
@@ -166,6 +174,49 @@ defmodule TraceGuardDemoWeb.DiagnosticsTest do
                Enum.find(report["events"], &(&1["name"] == "task.exception"))
 
       refute Jason.encode!(report) =~ "wf_demo_42"
+    end
+  end
+
+  describe "GenServer propagation (TraceGuard.call/3 + use TraceGuard.Server)" do
+    defp post_quote(conn, sku, qty) do
+      conn
+      |> put_req_header("content-type", "application/json")
+      |> post(~p"/api/quote", Jason.encode!(%{sku: sku, qty: qty}))
+    end
+
+    test "a successful traced call produces no report", %{conn: conn} do
+      assert %{"data" => %{"sku" => "TG-001", "qty" => 2}} =
+               json_response(post_quote(conn, "TG-001", 2), 200)
+
+      assert json_response(post_quote(build_conn(), "NOPE", 1), 404)
+      assert TraceGuard.list_reports() == []
+    end
+
+    @tag :capture_log
+    test "the server's query and crash are in the request's report", %{conn: conn} do
+      product!(%{sku: "TG-002", name: "Span Wrench", price_cents: 1_250, stock: 5})
+      conn = put_req_header(conn, "x-correlation-id", "quote-test-1")
+
+      {500, _headers, body} = assert_error_sent(500, fn -> post_quote(conn, "TG-002", 1) end)
+      assert Jason.decode!(body) == %{"errors" => %{"detail" => "Internal Server Error"}}
+
+      report = fetch_report_for_route!("/api/quote")
+      assert [%{"trace_id" => id}] = TraceGuard.list_reports(incoming_id: "quote-test-1")
+      assert id == report["trace_id"]
+
+      server = Enum.filter(report["events"], &(&1["process"] == "server-1"))
+
+      assert Enum.map(server, & &1["name"]) ==
+               ["genserver.call.start", "ecto.query", "genserver.call.exception"]
+
+      assert hd(server)["metadata"] == %{
+               "server" => "TraceGuardDemo.Pricing",
+               "operation" => "quote"
+             }
+
+      assert report["failure"]["exception"] == "TraceGuardDemo.Pricing.CurrencyError"
+      assert report["failure"]["message"] =~ "rate_api_token=[REDACTED]"
+      refute Jason.encode!(report) =~ "rt_demo_secret_77"
     end
   end
 

@@ -16,6 +16,7 @@ defmodule TraceGuardDemoWeb.Router do
     post "/checkout", CheckoutController, :create
     post "/inventory/sync", InventoryController, :sync
     post "/inventory/reconcile", InventoryController, :reconcile
+    post "/quote", QuoteController, :create
   end
 
   # Diagnostic reports are for developers only; never expose them in production.

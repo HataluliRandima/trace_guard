@@ -2,12 +2,84 @@
 
 TraceGuard's overhead, measured on the demo application. Every figure here
 was produced by the commands below. Raw outputs are in
-[`demo/bench/results/`](../demo/bench/results/).
+[`demo/bench/results/`](https://github.com/HataluliRandima/trace_guard/tree/main/demo/bench/results).
 
 > These are measurements of **one laptop running WSL2**, not production
 > performance figures. Treat the latency columns as order-of-magnitude
 > indications. Memory figures are deterministic and repeat exactly between
 > runs.
+
+## Release-candidate summary: what can be published (Phase 5 review)
+
+No production overhead target is claimed. Everything was measured on one
+WSL2 laptop, in-process, against SQLite.
+
+**Reliable observations.** These repeat exactly between runs, or held in
+every run:
+
+* Allocation in the request process: about **5.4–5.6 KB** per successful
+  request, about **1.1 KB** per recorded query event, about **0.37 KB** per
+  dropped event, and about **218 KB** to build one failure report.
+* Report size: about **15 KB** (demo checkout) to about **122 KB** (near-worst
+  case), so the default store bounds hold at most about **1.5–12 MB** of
+  reports.
+* Queue bounds hold under load: the store's mailbox never exceeded
+  `max_pending_reports` (50 of 50 during a locked-database outage with 500
+  failing requests).
+* Report building got cheaper in Phase 2 (842 KB → 212 KB per report).
+
+**Indicative, order of magnitude only.** These come from quiet runs, but on a
+single machine:
+
+* fixed cost of a successful request: **5–9 µs** median;
+* building a failure report: **0.7–1.0 ms** median;
+* a traced GenServer call: **about 5 µs**; the wrapper with no trace: **about
+  0.1 µs**;
+* first propagation in a request (collector start): **about 100 µs**
+  (recorded as future work);
+* storing a report: **about 10 µs** in memory, **about 0.4 ms** in SQLite
+  (p99 about 5 ms).
+
+**Noisy, don't publish.** Latency deltas for database-bound scenarios
+(catalog, audit, parallel catalog), all p99 deltas, and the concurrent pass.
+Their within-run drift was as large as the effect.
+
+**Not measured.** PostgreSQL, Cowboy (functionally tested only), real network
+I/O, production hardware, releases, multiple nodes, and long-running memory
+behaviour.
+
+## Phase 6: Ecto/PostgreSQL adapter costs
+
+Measured with `bench/ecto_storage_costs.exs` against PostgreSQL 16.15 on the
+same laptop (local TCP; plain `:timer.tc`; a 20-event report). There were two
+runs, and they agree; the second is in
+[`bench/results/phase6-ecto-costs.md`](https://github.com/HataluliRandima/trace_guard/blob/main/bench/results/phase6-ecto-costs.md).
+
+| Measurement | Median (run 1 / 2) | p99 (run 1 / 2) |
+| --- | --: | --: |
+| Request side: `Storage.put/1` (admission, pending mark, send) | 4 / 3 µs | 288 / 251 µs |
+| Writer: submit until committed (`:stored`) | 5.6 / 5.5 ms | 13.4 / 15.9 ms |
+| `get_report/1` (1,000 rows) | 0.60 / 0.58 ms | 1.4 / 1.2 ms |
+| `report_status/1` | 0.55 / 0.60 ms | 1.3 / 1.5 ms |
+| `list_reports(trace_id: ...)` (index) | 0.53 / 0.46 ms | 1.1 / 1.2 ms |
+| `list_reports()` (1,000 summaries) | 7.5 / 9.8 ms | 16.5 / 16.0 ms |
+
+Observations:
+
+* **The request path is unaffected** by database latency: only admission
+  runs there (a few microseconds).
+* **Writer throughput is the limit:** about 5.5 ms per report means roughly
+  180 reports per second from the single writer on this machine, dominated
+  by the commit (one transaction per report). Faster bursts are refused at
+  `max_pending_reports` and recorded as `{:dropped, :overloaded}`, never
+  queued without bound. Batching writes, or `SET LOCAL synchronous_commit TO
+  OFF` for these diagnostic writes, could raise this. Neither is implemented,
+  and both trade durability or simplicity.
+* **Reads** are a pool round trip (about 0.5 ms). Unfiltered listing is
+  bounded by `max_reports`.
+* WSL2 disk and fsync characteristics dominate the commit time; a server
+  with different storage will differ. Not measured: remote databases,
+  contended pools, large tables (beyond 1,000 rows).
 
 ## How to run
 
@@ -99,12 +171,103 @@ Elixir 1.17.0, Erlang/OTP 26.1.2 (JIT), Linux (WSL2), 12 × Intel Core
 i5-1245U, 7.6 GB RAM, SQLite via `ecto_sqlite3` 0.25 / `exqlite` 0.42,
 Phoenix 1.8.15, Bandit 1.12.5 (not used for dispatch).
 
+## Phase 4 results
+
+Two new measurements, run on the same laptop:
+
+* `bench/phase4_costs.exs` isolates propagation, admission, persistence,
+  retrieval, a failure burst and a database outage:
+  `MIX_ENV=bench mix run --no-start bench/phase4_costs.exs` (result:
+  [`phase4-costs.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase4-costs.md)).
+* `bench.requests` gained scenario 6 (`POST /api/quote`: one traced
+  GenServer call with one query). It ran twice:
+  [`phase4-run1.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase4-run1.md),
+  [`phase4-run2.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase4-run2.md).
+
+All three runs used the working tree with Phase 4 uncommitted. After them,
+two guards were added to the propagation path (ignore tokens from another
+node; never raise when recording a task or server event). They cost one node
+comparison and one `try` per call, and weren't re-measured.
+
+### Propagation
+
+| Measurement (median) | Value |
+| --- | --: |
+| 10 × `GenServer.call/3` to an echo server | 12.44 µs |
+| 10 × `TraceGuard.call/3`, caller without a trace | 13.54 µs |
+| Trace start + finish (success), no calls | 0.53 µs |
+| Trace start + 10 × `TraceGuard.call/3` + finish | 64.49 µs |
+| **Wrapper only, per call** ((b − a) / 10) | **≈ 0.11 µs** |
+| **Per traced call, including the trace's collector start amortized over 10 calls** ((d − c − a) / 10) | **≈ 5.2 µs** |
+
+In a whole request (scenario 6), the enabled-vs-disabled delta was
+**+106.8 µs** in run 1 (range +102…+116 µs, low drift: disabled medians
+177.8–185.2 µs). Run 2 measured +3.6 µs with wide drift (disabled 106–511 µs)
+and is not usable. Most of the per-request cost is starting the trace's
+collector process on the first propagated call. Task propagation (scenario 5)
+pays the same fixed cost: +305 / +302 µs for four tasks.
+
+### Report admission, persistence and retrieval
+
+| Measurement (median, p99) | ReportStore (memory) | SQLite |
+| --- | --: | --: |
+| Submit + wait until stored | 11.1 µs, 251 µs | 380.5 µs, 5.39 ms |
+| Refused at admission (queue full) | 7.4 µs, 88 µs | (same facade path) |
+| `get_report/1` | 7.4 µs | 143.3 µs |
+| `report_status/1` (stored) | 7.1 µs | 163.3 µs |
+| `list_reports/0` (50 summaries) | 76.3 µs | 438.7 µs |
+| `await_report/2` (already stored) | 15.8 µs | — |
+
+The refusal path is not just an atomic add. It also writes the pending mark
+and the drop record to ETS, bumps a counter, and emits the `:dropped`
+telemetry event, all in the request process.
+
+### Failure burst (500 failing checkouts, 8 concurrent request processes)
+
+| | ReportStore | SQLite |
+| --- | --: | --: |
+| Accepted / refused (overloaded) | 500 / 0 | 307 / 193 |
+| Retained afterwards | 50 | 50 |
+| Store process memory after GC | 1537 KB | 2.8 KB |
+| VM memory delta after GC (all processes) | +692 KB | +104 KB |
+| Drop records (cap 1000) | 1000 → 1000 | 1000 → 1000 |
+
+SQLite refuses more because one writer at about 0.4 ms per report is slower
+than 8 concurrent failing requests. That is the admission policy working: the
+queue stays at most `max_pending_reports`, and the rest are refused and
+recorded. The drop record count was already at its cap from the preceding
+refusal benchmark and stayed there.
+
+### Database outage (SQLite locked by another connection, 500 failing requests)
+
+* Largest writer mailbox observed (sampled about every 1 ms): **50**, equal
+  to `max_pending_reports`.
+* 433 refused at admission. 16 admitted, then failed with `{:sqlite_error,
+  "database is locked"}` and recorded as drops. 51 stored after the lock was
+  released.
+* No request was affected.
+
+### Request benchmark (scenarios 1–5 unchanged)
+
+With the Phase 4 code, the memory deltas for scenarios 1–5 match Phase 3:
++5.6 KB (health), +11.2–11.6 KB (catalog), +218 KB (checkout), +117.2 KB
+(audit), +6.4 KB (Tasks). Scenario 6 adds +6.1 KB. The drift columns again
+show a noisy machine: the disabled catalog ranged 354–852 µs within run 2,
+and the disabled audit 16.9–47.9 ms within run 1. The latency rows with
+narrow drift (health, 3a in run 2, scenario 6 in run 1) are the usable ones:
+
+| Scenario | Δ median (low-drift run) | Drift (disabled range) |
+| --- | --: | --: |
+| 1. health | +9.1 µs (run 2) | 11.5–12.8 µs |
+| 3a. checkout, stored | +984 µs (run 2) | 282.9–322.6 µs |
+| 6. quote (1 traced GenServer call) | +106.8 µs (run 1) | 177.8–185.2 µs |
+
 ## Phase 3 results
 
 Two full runs with the default settings (3 rounds; 1 s warm-up, 3 s timing,
 1 s memory per measurement). The raw files are
-[`phase3-run1.md`](../demo/bench/results/phase3-run1.md) and
-[`phase3-run2.md`](../demo/bench/results/phase3-run2.md), which also hold
+[`phase3-run1.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase3-run1.md) and
+[`phase3-run2.md`](https://github.com/HataluliRandima/trace_guard/blob/main/demo/bench/results/phase3-run2.md), which also hold
 per-round data. Both were run from a working tree with the Phase 3 changes
 uncommitted.
 
@@ -290,6 +453,11 @@ not promises:
 | Report submission in the request process (Phase 3) | no measurable cost | 3a vs 3b: same allocation; latency difference below noise | One atomic add and one `send/2`; the report copy is allocated in the store. |
 | Report retention in the store (Phase 3) | ≤ 50 µs median per report | 7.8–14.2 µs | Off the request path. Bounds the drain rate after a burst. |
 | Report store memory at defaults (Phase 3) | ≤ 16 MB | 1.5 MB typical, 12 MB near-worst case | (`max_reports` + `max_pending_reports`) × report size; tune both, or `max_events`. |
+| `TraceGuard.call/3` without a trace (Phase 4) | ≤ 1 µs per call | ≈ 0.11 µs | Always wraps the message, so a missing `use TraceGuard.Server` fails the same way everywhere. |
+| Traced GenServer call (Phase 4) | ≤ 10 µs per call | ≈ 5.2 µs | Lifecycle events and messages to the collector. |
+| First propagation in a request (collector start, Phase 4) | ≤ 150 µs | ≈ 100 µs (scenario 6, low-drift run) | One supervised process per propagating trace. Pooling collectors is a possible future optimization; not done. |
+| SQLite write (store side, Phase 4) | ≤ 1 ms median | 0.38 ms | One transaction per report, one writer; bursts beyond that are refused, never queued unboundedly. |
+| Drop record memory (Phase 4) | ≤ 1000 records | at cap 1000 | `max_drop_records`; one small ETS row each (trace ID, normalized reason, two integers). |
 
 \* Measured in the optimized, quiet runs. The final runs on the slower
 machine state measured 1.15–1.46 ms.

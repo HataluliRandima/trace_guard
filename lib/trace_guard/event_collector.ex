@@ -1,5 +1,8 @@
 defmodule TraceGuard.EventCollector do
   @moduledoc """
+  **Internal module.** Not part of TraceGuard's public API: it may change in
+  any release. Use the functions in `TraceGuard` instead.
+
   Appends diagnostic events to the calling process's `TraceGuard.Context`.
 
   Every event has the same internal shape:
@@ -65,7 +68,12 @@ defmodule TraceGuard.EventCollector do
       metadata: metadata
     }
 
-    Propagation.send_event(ctx.tasks, event, Config.get().max_events)
+    Propagation.send_event(
+      ctx.tasks,
+      ctx.request[:kind] || "task",
+      event,
+      Config.get().max_events
+    )
   end
 
   defp record_in(ctx, name, type, metadata, opts) do

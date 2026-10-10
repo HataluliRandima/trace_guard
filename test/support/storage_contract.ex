@@ -5,6 +5,9 @@ defmodule TraceGuard.StorageContract do
   #
   #     use TraceGuard.StorageContract, storage: TraceGuard.ReportStore
   #
+  # An optional `setup:` block runs after the adapter is configured (e.g. to
+  # start the adapter's process with a fresh database).
+  #
   # The adapter must retain at most 3 reports for these tests (configured
   # through :max_reports, or the adapter's own :max option).
 
@@ -14,10 +17,14 @@ defmodule TraceGuard.StorageContract do
 
       import TraceGuard.TestHelpers
 
+      @moduletag unquote(opts[:moduletag] || [])
+
       @storage unquote(opts[:storage])
 
       setup do
         configure(storage: @storage, max_reports: 3)
+        unquote(opts[:setup])
+        TraceGuard.clear_reports()
         :ok
       end
 

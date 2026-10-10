@@ -3,7 +3,7 @@
 # deliberately failing request.
 #
 #   cd demo && mix phx.server            # in one terminal
-#   ./scripts/run_demo.sh [output.json] [task_output.json]  # in another
+#   ./scripts/run_demo.sh [output.json] [task_output.json] [server_output.json]
 #
 # Requires curl. Uses python3 (if present) only to pretty-print JSON.
 set -euo pipefail
@@ -11,6 +11,7 @@ set -euo pipefail
 BASE="${BASE:-http://localhost:4000}"
 OUT="${1:-trace_guard_report.json}"
 TASK_OUT="${2:-trace_guard_task_report.json}"
+SERVER_OUT="${3:-trace_guard_server_report.json}"
 
 pretty() { if command -v python3 >/dev/null; then python3 -m json.tool; else cat; fi; }
 header() { grep -i "^$1:" | head -1 | cut -d' ' -f2 | tr -d '\r'; }
@@ -61,9 +62,23 @@ echo "Correlation ID $CORRELATION_ID -> trace $TASK_TRACE_ID"
 echo "Exporting report $TASK_TRACE_ID to $TASK_OUT"
 curl -sS --fail "$BASE/dev/traces/$TASK_TRACE_ID" | pretty > "$TASK_OUT"
 
-LEAKS=0
-for secret in hunter2 4242424242424242 demo_merchant_key_123 demo-user-session-token demo-client-key-123 wf_demo_42; do
-  if grep -q "$secret" "$OUT" "$TASK_OUT"; then echo "LEAK: $secret"; LEAKS=1; fi
+echo
+echo "== 7. Failure inside an explicitly traced GenServer call (TraceGuard.call/3)"
+QUOTE_ID="demo-quote-$$-$(date +%s)"
+curl -sS -X POST "$BASE/api/quote" -H 'content-type: application/json' \
+  -H "x-correlation-id: $QUOTE_ID" -d '{"sku":"TG-002","qty":1}'; echo
+SERVER_TRACE_ID=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  SERVER_TRACE_ID="$(curl -sS "$BASE/dev/traces?incoming_id=$QUOTE_ID" | grep -o '[0-9a-f]\{32\}' | head -1)"
+  [ -n "$SERVER_TRACE_ID" ] && break
+  sleep 0.1
 done
-[ "$LEAKS" -eq 0 ] && echo "OK: none of the 6 sensitive test values appear in $OUT or $TASK_OUT"
+echo "Correlation ID $QUOTE_ID -> trace $SERVER_TRACE_ID"
+curl -sS --fail "$BASE/dev/traces/$SERVER_TRACE_ID" | pretty > "$SERVER_OUT"
+
+LEAKS=0
+for secret in hunter2 4242424242424242 demo_merchant_key_123 demo-user-session-token demo-client-key-123 wf_demo_42 rt_demo_secret_77; do
+  if grep -q "$secret" "$OUT" "$TASK_OUT" "$SERVER_OUT"; then echo "LEAK: $secret"; LEAKS=1; fi
+done
+[ "$LEAKS" -eq 0 ] && echo "OK: none of the 7 sensitive test values appear in $OUT, $TASK_OUT or $SERVER_OUT"
 exit "$LEAKS"
