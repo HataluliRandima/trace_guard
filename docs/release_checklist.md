@@ -12,14 +12,14 @@ Phase 7 review ([phase7_review.md](phase7_review.md)):
 
 | # | Item | Evidence required | Status |
 | --- | --- | --- | --- |
-| 1 | **CI green** | a passing `CI` run on GitHub for the commit to release: library checks, demo, minimum toolchain | ☐ workflows written and their steps pass locally; **never run on GitHub** |
-| 2 | **Real PostgreSQL CI green** | the `PostgreSQL 16` and `PostgreSQL 18` jobs of that run, with no excluded tests | ☐ passes locally against 16.15 and 18.6; **not yet on GitHub** |
-| 3 | **Clean migration workflow verified** | the `Clean install` job of that run | ☐ passes locally (PostgreSQL 16 and 18); **not yet on GitHub** |
-| 4 | **Compatibility workflow green** | one manual run of `Compatibility` (Actions → Compatibility → Run workflow) | ☐ passes locally; **not yet on GitHub** |
+| 1 | **CI green** | a passing `CI` run on GitHub for the commit to release: library checks, demo, minimum toolchain | ☑ [run 38040243638](https://github.com/HataluliRandima/trace_guard/actions/runs/38040243638) (`882fc9a`); re-check for the commit you tag |
+| 2 | **Real PostgreSQL CI green** | the `PostgreSQL 16` and `PostgreSQL 18` jobs of that run, with no excluded tests | ☑ same run: both jobs succeeded (their step fails on any exclusion or a wrong server version) |
+| 3 | **Clean migration workflow verified** | the `Clean install` job of that run | ☑ same run (PostgreSQL 16); also passes locally on 18 |
+| 4 | **Compatibility workflow green** | one manual run of `Compatibility` (Actions → Compatibility → Run workflow) | ☑ [run 38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035) (`882fc9a`, manual): all four jobs succeeded |
 | 5 | **Supported toolchain documented** | [compatibility.md](compatibility.md) matches the CI matrix | ☑ |
 | 6 | **Security limitations disclosed** | [security.md](security.md): logs aren't sanitized, PostgreSQL deletion is logical, SQLite caveats | ☑ |
 | 7 | **Experimental API boundaries clear** | ExDoc groups; `TraceGuard.Server`, `TraceGuard.Storage` and its adapters, the migration and its task are labelled experimental | ☑ (CI passing doesn't make them stable) |
-| 8 | **Git history and integration plan agreed** | the maintainer has decided how Phase 7 reaches `main` (see phase7_review.md) | ☐ maintainer decision |
+| 8 | **Git history and integration plan agreed** | the maintainer has decided how Phase 7 reaches `main` (see phase7_review.md) | ☑ Phase 7 is on `main` (`882fc9a`); future work through pull requests |
 | 9 | **Release notes ready** | `CHANGELOG.md` entry; an announcement that says "experimental preview" and lists the limits | ☐ changelog done; announcement not written |
 | 10 | **Tag exists** | `v0.1.0-rc.1` points at the released commit (ExDoc's source links use it) | ☐ maintainer action, step 10 |
 

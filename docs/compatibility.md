@@ -28,11 +28,13 @@ exists in the repository or in CI secrets.
 PostgreSQL 18), plus `scripts/external_smoke.sh` with Bandit and Cowboy ×
 memory and SQLite on Elixir 1.17.1 / OTP 27.0.
 
-**Status: configured, not yet run on GitHub.** The workflows have been
-linted (`actionlint` with `shellcheck`), and every job's `run:` steps were
-executed locally, in order, with the job's exact toolchain (see the table
-below). Service startup, caching, checkout and artifact upload only happen
-on GitHub. The first real run is still to come.
+**Status:** `ci.yml` first ran on GitHub for `882fc9a`
+([run 38040243638](https://github.com/HataluliRandima/trace_guard/actions/runs/38040243638)), and all six jobs succeeded,
+including PostgreSQL 16 and 18 with nothing excluded. `compat.yml` ran
+manually for the same commit ([run 38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035)): all four jobs
+succeeded. Before that, both workflows were linted (`actionlint`
+with `shellcheck`), and every job's `run:` steps were executed locally with
+the job's exact toolchain (see the table below).
 
 **Locally verified but not in CI:** the demo and the clean-install test on
 other toolchains, PostgreSQL 18 for the clean-install test, and the

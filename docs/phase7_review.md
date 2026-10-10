@@ -14,30 +14,28 @@ The brief's Git facts were out of date:
 * **Working tree:** clean, nothing staged, `git diff --check` clean. No
   tags locally or on the remote. No CI configuration existed.
 
-Phase 7 changed no Git state: nothing was committed, staged, tagged,
-pushed, merged or published. All changes are uncommitted on the `main`
-checkout.
+Phase 7 itself changed no Git state. The maintainer then committed it
+directly on `main` as `882fc9a` ("add postgres") and pushed it, so
+`origin/main` = `882fc9a` contains Phases 4–7. That push started the first
+GitHub Actions run (see CI below). No tag exists. `phase4` is fully merged
+and can be deleted when no longer needed.
 
-**Recommended integration sequence (maintainer):**
+**Remaining steps (maintainer):**
 
-1. `git switch -c phase7`: the uncommitted changes move with you.
-2. Review and commit, then `git push -u origin phase7`. The push triggers
-   `ci.yml` (it runs on `phase*`).
-3. Open a pull request to `main` and wait for every `CI` job to pass. Also
-   run `Compatibility` once by hand (Actions → Compatibility → Run
-   workflow).
-4. Merge when green. Optionally, protect `main` by requiring the `CI` jobs.
-5. Only then, and only if the external-preview gate in
+1. Run `Compatibility` once by hand (Actions → Compatibility → Run
+   workflow), since it has never run on GitHub.
+2. Optionally, protect `main` by requiring the `CI` jobs, and send future
+   work through pull requests.
+3. Only when the external-preview gate in
    [release_checklist.md](release_checklist.md) is complete, tag
-   `v0.1.0-rc.1` on that merge commit.
+   `v0.1.0-rc.1` on the commit to release.
 
-No force-push or history rewrite is needed. `phase4` can be deleted once
-you no longer need it, since it's fully merged.
+No force-push or history rewrite is needed.
 
 ## CI
 
 * **`.github/workflows/ci.yml`** (pull requests; pushes to `main` and
-  `phase*`; manual), seven jobs:
+  `phase*`; manual), six jobs:
   * library checks with no database;
   * the demo;
   * PostgreSQL 16 and PostgreSQL 18 (service containers);
@@ -67,9 +65,17 @@ you no longer need it, since it's fully merged.
     * an unknown row;
     * the wrong PostgreSQL version;
     * no PostgreSQL server.
-* **Not yet run on GitHub.** Both workflows pass `actionlint` 1.7.12 with
-  `shellcheck` 0.11.0. Every job's `run:` steps were executed locally, in
-  order, with GitHub's `bash -eo pipefail` and the job's exact toolchain:
+* **First GitHub run:** [run 38040243638](https://github.com/HataluliRandima/trace_guard/actions/runs/38040243638), on the
+  push of `882fc9a` to `main`. **All six `ci.yml` jobs succeeded**
+  (63–98 s each). The PostgreSQL steps can only succeed if the suite
+  reported `PostgreSQL 16.` or `PostgreSQL 18.` and excluded nothing, so
+  both service containers really ran the database suite. Job logs (exact
+  test counts) need a GitHub sign-in to read. `compat.yml` hasn't run on
+  GitHub yet.
+* **Before that,** both workflows passed `actionlint` 1.7.12 with
+  `shellcheck` 0.11.0, and every job's `run:` steps were executed locally,
+  in order, with GitHub's `bash -eo pipefail` and the job's exact
+  toolchain:
 
 | Job | Result (local) |
 | --- | --- |
@@ -95,15 +101,52 @@ configuration. So `scripts/local_postgres.sh` gained `PG_MAJOR=18`:
 
 CI uses the official `postgres:16` and `postgres:18` images.
 
-**One unexplained failure.** The very first run against PostgreSQL 18
-reported 1 failure in 171 tests, and its details were lost (I only kept
-the summary). It didn't recur in 72 further runs: 60 full-suite runs and 12
-PostgreSQL-only runs, half of them under full CPU load, and a run on a
-freshly initialised cluster. A possible cause is the outage test's
-assumption that no new pool connection slips in between
-`ALLOW_CONNECTIONS false` and terminating the existing backends. I didn't
-change the test without evidence. If CI shows a failure, its log will say
-which test it was.
+**One unexplained failure (investigated in Phase 7.1).** The very first
+suite run against PostgreSQL 18 (03:03:30, 2026-10-10) reported
+`1 doctest, 171 tests, 1 failure`. I had kept only the last 6 lines of its
+output, so **the failing test's name, seed, assertion and error are lost.**
+They can't be recovered:
+
+* ExUnit's failure manifest was overwritten (it is now empty).
+* The session transcript holds only those 6 lines.
+* No other log of that run exists.
+
+What the surviving evidence does show:
+
+* **No server-side anomaly.** PostgreSQL 18's own log shows the same kinds
+  and counts of events in that run as in the 83 later runs against the same
+  server:
+  * the missing-table test's `undefined_table` errors;
+  * the outage test's 10 terminated backends and cancel requests;
+  * nothing else.
+
+  No PostgreSQL-18-specific error was raised.
+* **Not a timeout.** The run took 19.4 s (18.8 s synchronous), inside the
+  range of the passing runs (19.4–19.7 s). Every long wait in the
+  PostgreSQL tests is 5 s or more, so the failure was a fast assertion
+  mismatch or exception, not one of those waits running out.
+* **The visible stack trace is unrelated.** The tail ended in a
+  `gen_server.erl:1142` stack. That is the expected `PricingServer` crash
+  log that every run prints, passing ones included.
+* **Not reproduced:** 72 further runs passed. These were 60 full-suite and
+  12 PostgreSQL-only runs, half of them under full CPU load, plus one on a
+  freshly initialised cluster and every local CI job since.
+
+What remains uncertain:
+
+* whether it was a PostgreSQL test at all (150 of the 171 tests don't
+  touch PostgreSQL);
+* whether PostgreSQL 18 played any part.
+
+The outage-test race I suggested earlier is unlikely: the pool is idle and
+fully connected when the test closes the database, so no connection is
+being established in that window. Without knowing the test, a regression
+test would be guesswork, so none was added.
+
+Lesson applied: CI keeps the complete job log (and the PostgreSQL jobs
+`tee` the full output), so a recurrence there will name the test and its
+seed. Locally, keep full logs (`mix test 2>&1 | tee run.log`), never only a
+`tail`.
 
 ## Clean installation and migration workflow
 
@@ -218,26 +261,29 @@ avoided anyway, so it doesn't justify changing the writer.
 
 ## Outstanding blockers to an external preview
 
-1. **CI has never run on GitHub.** The workflows have to pass there once
-   (push a `phase7` branch).
-2. **Integration decision:** how Phase 7 reaches `main` (sequence above).
-3. **No `v0.1.0-rc.1` tag**, which ExDoc's source links point to.
-4. **No announcement or release notes** beyond the changelog.
-5. **One unexplained failure** in 73 runs against PostgreSQL 18 (see above).
-6. **Not tested:**
+1. ~~`compat.yml` never run on GitHub~~: resolved. The manual
+   [run 38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035) for `882fc9a` passed all four jobs: rows
+   current, elixir117-otp27 and latest (PostgreSQL 16, 16 and 18), and the
+   external Bandit/Cowboy × memory/SQLite test.
+2. **No `v0.1.0-rc.1` tag**, which ExDoc's source links point to.
+3. **No announcement or release notes** beyond the changelog.
+4. **One unexplained failure** in 73 local runs against PostgreSQL 18
+   (details unrecoverable; see above). CI passed on PostgreSQL 18 on its
+   first run.
+5. **Not tested:**
    * PostgreSQL other than 16 and 18;
    * managed or pooled PostgreSQL (TLS, PgBouncer);
    * macOS and Windows;
    * releases;
    * multiple nodes;
    * sustained load.
-7. **No production use.** The Ecto adapter, `TraceGuard.Server` and the
+6. **No production use.** The Ecto adapter, `TraceGuard.Server` and the
    storage behaviour remain **experimental**.
 
 ## Recommendation
 
-TraceGuard is **ready for an experimental external preview once
-`ci.yml` and `compat.yml` have passed on GitHub** for the commit to be
-tagged. Everything they run passes locally, so I expect that to be a
-formality, but it must be confirmed, not assumed. Until then, it's not
-ready. The Ecto adapter stays experimental regardless of CI.
+`ci.yml` is green on GitHub for `882fc9a`. `compat.yml` is green too
+([run 38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035)). TraceGuard is **ready for an
+experimental external preview** once the release text is updated, CI passes
+on the commit to tag, and that commit is tagged. The Ecto adapter stays
+experimental regardless of CI.
