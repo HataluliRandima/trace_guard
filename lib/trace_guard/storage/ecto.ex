@@ -1,7 +1,7 @@
 if Code.ensure_loaded?(Ecto.Adapters.SQL) do
   defmodule TraceGuard.Storage.Ecto do
     @moduledoc """
-    **Experimental in 0.1.0-rc.1** (the Ecto/PostgreSQL adapter): the API may
+    **Experimental in 0.1.0-rc.2** (the Ecto/PostgreSQL adapter): the API may
     change before 1.0.
 
     Stores reports in your application's **existing PostgreSQL database

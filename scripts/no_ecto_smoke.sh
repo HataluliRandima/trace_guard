@@ -3,7 +3,7 @@
 # without Ecto (`mix phx.new --no-ecto`) installs the built TraceGuard
 # package, configures nothing but the plug, and gets in-memory reports.
 # TRACE_GUARD_DEP replaces the built package with any dependency options,
-# for example 'github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"'.
+# for example 'github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"'.
 #
 #   scripts/no_ecto_smoke.sh
 #

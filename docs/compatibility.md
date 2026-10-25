@@ -51,9 +51,10 @@ with Bandit and Cowboy × memory and SQLite on Elixir 1.17.1 / OTP 27.0; and
 ([run 38040243638](https://github.com/HataluliRandima/trace_guard/actions/runs/38040243638)), and all six jobs succeeded,
 including PostgreSQL 16 and 18 with nothing excluded. `compat.yml` ran
 manually for the same commit ([run 38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035)): all four jobs
-succeeded. Both runs predate the Phase 8 workflow changes (pinned
-minors, the audit job), which haven't run on GitHub yet. Before the first
-runs, both workflows were linted (`actionlint`
+succeeded. **The released commit, `67905b6` (v0.1.0-rc.1),** passed CI
+[38055935412](https://github.com/HataluliRandima/trace_guard/actions/runs/38055935412) (six jobs, pinned PostgreSQL 16.15 and 18.6) and Compatibility [38057068064](https://github.com/HataluliRandima/trace_guard/actions/runs/38057068064)
+(five jobs, including the retired-package audit). Before the first runs,
+both workflows were linted (`actionlint`
 with `shellcheck`), and every job's `run:` steps were executed locally with
 the job's exact toolchain (see the table below).
 
