@@ -4,26 +4,58 @@ Steps for cutting a TraceGuard release. **Publishing is a manual, human
 step.** Nothing in this repository publishes automatically, and no CI
 workflow has publishing credentials.
 
-## 0. Release gate for 0.1.0-rc.1 (experimental GitHub pre-release)
+## 0. Release gate for 0.1.0-rc.2 (experimental GitHub pre-release)
 
-Distribution: a Git tag `v0.1.0-rc.1` and a GitHub pre-release. **Not
+Distribution: a Git tag `v0.1.0-rc.2` and a GitHub pre-release. **Not
 Hex.** Every box must be ticked, with evidence, **for the commit that will
 be tagged**. A run on an earlier commit doesn't count for a later one.
-Status at the end of Phase 8 (the release commit isn't made yet):
+rc.2 fixes the timeline order (see `CHANGELOG.md`). The fix was checked
+in a real application that uses ErrorTracker, through a path dependency.
 
 | # | Item | Evidence required | Status |
 | --- | --- | --- | --- |
-| 1 | **CI green on the release commit** | a passing `CI` run whose commit is the one to tag | ☐ the release commit doesn't exist yet. Earlier runs: [38040243638](https://github.com/HataluliRandima/trace_guard/actions/runs/38040243638) on `882fc9a` (passed) |
+| 1 | **CI green on the release commit** | a passing `CI` run whose commit is the one to tag | ☐ |
 | 2 | **Real PostgreSQL CI green** | the `PostgreSQL 16.15` and `PostgreSQL 18.6` jobs of that run | ☐ with item 1 |
 | 3 | **Clean install green** | the `Clean install` job of that run | ☐ with item 1 |
-| 4 | **Compatibility green on the release commit** | a manual `Compatibility` run on that commit (the workflow itself changed in Phase 8) | ☐ earlier: [38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035) on `882fc9a` (passed) |
-| 5 | **Git-tag installation verified** | a fresh Phoenix app installs `{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"}` | ☐ locally ✅: a scratch tag behind a Git URL redirect, so the documented line ran unchanged (memory without Ecto, and the Ecto adapter with migration). Against GitHub: needs the real tag (step 9) |
+| 4 | **Compatibility green on the release commit** | a manual `Compatibility` run on that commit, finished **before** tagging | ☐ |
+| 5 | **Git-tag installation verified** | a fresh Phoenix app installs `{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"}` | ☐ after tagging (step 9) |
+| 6 | **Supported toolchain documented** | [compatibility.md](compatibility.md) matches the CI matrix | ☑ unchanged since rc.1 |
+| 7 | **Security limitations disclosed** | [security.md](security.md) | ☑ unchanged since rc.1 |
+| 8 | **Experimental API boundaries clear** | ExDoc groups and module docs | ☑ unchanged since rc.1 |
+| 9 | **Release notes ready** | the `CHANGELOG.md` entry and the announcement (`docs/announcements/v0.1.0-rc.2.md`) | ☐ drafted; maintainer review |
+| 10 | **Tag exists** | `v0.1.0-rc.2` points at the release commit | ☐ maintainer action |
+| 11 | **Pre-release published** | a GitHub release, marked pre-release, from that tag | ☐ maintainer action |
+
+### Record: 0.1.0-rc.1
+
+**Released 2026-10-10:** [the pre-release](https://github.com/HataluliRandima/trace_guard/releases/tag/v0.1.0-rc.1), tag `v0.1.0-rc.1` on `67905b6` (the merge
+of pull request #2). The record:
+
+| # | Item | Evidence | Status |
+| --- | --- | --- | --- |
+| 1 | **CI green on the release commit** | a passing `CI` run whose commit is the one to tag | ☑ [38055935412](https://github.com/HataluliRandima/trace_guard/actions/runs/38055935412) on `67905b6`, all six jobs (13:29 UTC, before publishing) |
+| 2 | **Real PostgreSQL CI green** | the `PostgreSQL 16.15` and `PostgreSQL 18.6` jobs of that run | ☑ same run |
+| 3 | **Clean install green** | the `Clean install` job of that run | ☑ same run |
+| 4 | **Compatibility green on the release commit** | a manual `Compatibility` run on that commit | ☑ [38057068064](https://github.com/HataluliRandima/trace_guard/actions/runs/38057068064) on `67905b6`, all five jobs. **Ran 8 minutes after publishing** (13:47 vs. 13:39 UTC), not before. For the next release, run it before tagging |
+| 5 | **Git-tag installation verified** | a fresh Phoenix app installs `{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"}` | ☑ before the release: locally, through a scratch tag. After it: from GitHub itself. App without Ecto 4/4; PostgreSQL app with the Ecto adapter and migration 14/14; both lock files record `67905b6` |
 | 6 | **Supported toolchain documented** | [compatibility.md](compatibility.md) matches the CI matrix | ☑ |
 | 7 | **Security limitations disclosed** | [security.md](security.md): logs aren't sanitized, unlabelled secrets, PostgreSQL deletion is logical, reports can be dropped | ☑ |
 | 8 | **Experimental API boundaries clear** | ExDoc groups and module docs | ☑ (CI passing doesn't make them stable) |
-| 9 | **Release notes ready** | the `CHANGELOG.md` entry and the announcement draft (`docs/announcements/v0.1.0-rc.1.md`) | ☐ drafted; maintainer review |
-| 10 | **Tag exists** | `v0.1.0-rc.1` points at the release commit (ExDoc's source links use it) | ☐ maintainer action |
-| 11 | **Pre-release published** | a GitHub release, marked pre-release, from that tag | ☐ maintainer action |
+| 9 | **Release notes ready** | the `CHANGELOG.md` entry and the announcement (`docs/announcements/v0.1.0-rc.1.md`) | ☑ the announcement is the pre-release's text |
+| 10 | **Tag exists** | `v0.1.0-rc.1` points at the release commit (ExDoc's source links use it) | ☑ `67905b6`, created by GitHub when publishing (a lightweight tag) |
+| 11 | **Pre-release published** | a GitHub release, marked pre-release, from that tag | ☑ 2026-10-10 13:39 UTC |
+
+### How rc.1 was tagged, and what to do next time
+
+Pushing a tag from a terminal needs GitHub credentials there. Instead, the
+tag was created by GitHub's release form ("Create new tag on publish", target `67905b6`).
+That works and needs no local credentials. The result is a lightweight
+tag, with no message. For the next release:
+
+1. Run CI **and** Compatibility on the commit to release, and wait for
+   both.
+2. Create the release and tag together, in GitHub's release form or with
+   step 9.
 
 ## 1. Clean state
 
@@ -141,28 +173,28 @@ on GitHub for the commit to tag:
 git switch main && git pull --ff-only
 git status --short                          # expect no output
 git log --oneline -1                        # the commit CI and Compatibility passed on
-git tag -a v0.1.0-rc.1 -m "TraceGuard 0.1.0-rc.1 (experimental preview)"
-git push origin v0.1.0-rc.1
+git tag -a v0.1.0-rc.2 -m "TraceGuard 0.1.0-rc.2 (experimental preview)"
+git push origin v0.1.0-rc.2
 ```
 
 Then verify the published tag from a clean machine or directory (this is
 the one check that can't run before the tag exists):
 
 ```bash
-TRACE_GUARD_DEP='github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"' scripts/no_ecto_smoke.sh
-TRACE_GUARD_DEP='github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"' \
+TRACE_GUARD_DEP='github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"' scripts/no_ecto_smoke.sh
+TRACE_GUARD_DEP='github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"' \
   TRACE_GUARD_POSTGRES_URL=... scripts/external_postgres_smoke.sh
 ```
 
 Then, on GitHub: Releases → Draft a new release → choose tag
-`v0.1.0-rc.1` → title "TraceGuard 0.1.0-rc.1 (experimental preview)" →
+`v0.1.0-rc.2` → title "TraceGuard 0.1.0-rc.2 (experimental preview)" →
 paste the announcement → tick **Set as a pre-release** → Publish.
 
 A tag is easy to create and awkward to retract once people have fetched it.
 If something is wrong after tagging, release `v0.1.0-rc.2` rather than
 moving the tag.
 
-## 10. Hex (not part of 0.1.0-rc.1)
+## 10. Hex (not part of the 0.1.0 release candidates)
 
 Publishing to Hex is a separate, later decision. It permanently claims the
 package name, and a version can only be reverted briefly. When it comes:

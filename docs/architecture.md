@@ -82,7 +82,13 @@ context. Consequences:
 
 Events carry a per-trace sequence number and a `System.monotonic_time/0`
 reading. Reports sort by `{monotonic_time, seq}` and express time as
-`offset_us` from the request's start. Durations come from the source's own
+`offset_us` from the request's start. Most events are timestamped when
+TraceGuard's handler runs. The end of a span (`phoenix.endpoint.stop`,
+`phoenix.router_dispatch.stop` and `.exception`) is timestamped at its
+start plus the span's `duration` instead. Another handler of the same
+event can run before TraceGuard's: an error reporter such as ErrorTracker
+writes to the database from its exception handler. Its queries then appear
+after the exception, which is when they ran. Durations come from the source's own
 measurements (`duration`, `total_time`), which are also monotonic. The only
 wall-clock values are `request.started_at` and `generated_at` (UTC,
 ISO 8601).

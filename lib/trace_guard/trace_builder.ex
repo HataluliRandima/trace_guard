@@ -8,7 +8,8 @@ defmodule TraceGuard.TraceBuilder do
   The pipeline is fixed and runs entirely in the request process when the
   request completes:
 
-    1. **Order** events by observation time, then by sequence number.
+    1. **Order** events by time (see "Timestamps" in
+       `TraceGuard.EventCollector`), then by sequence number.
     2. **Convert** monotonic timestamps into microsecond offsets from the
        start of the request.
     3. **Sanitize** every value into a JSON-safe term: strings are truncated,

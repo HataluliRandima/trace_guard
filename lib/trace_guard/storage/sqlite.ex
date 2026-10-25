@@ -1,7 +1,7 @@
 if Code.ensure_loaded?(Exqlite.Sqlite3) do
   defmodule TraceGuard.Storage.SQLite do
     @moduledoc """
-    **Experimental in 0.1.0-rc.1** (the SQLite adapter): the API may change before 1.0.
+    **Experimental in 0.1.0-rc.2** (the SQLite adapter): the API may change before 1.0.
 
     A persistent `TraceGuard.Storage` adapter for local development and
     testing: reports are kept in a SQLite file and survive restarts.

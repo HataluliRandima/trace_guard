@@ -99,12 +99,13 @@ defmodule TraceGuard.Telemetry do
   ## Phoenix endpoint
 
   defp handle([:phoenix, :endpoint, :start], _measurements, _metadata) do
-    EventCollector.record("phoenix.endpoint.start", "endpoint", %{})
+    EventCollector.record("phoenix.endpoint.start", "endpoint", %{}, span: {:start, :endpoint})
   end
 
   defp handle([:phoenix, :endpoint, :stop], measurements, %{conn: conn}) do
     EventCollector.record("phoenix.endpoint.stop", "endpoint", %{status: conn.status},
-      duration: measurements[:duration]
+      duration: measurements[:duration],
+      span: {:stop, :endpoint}
     )
   end
 
@@ -122,7 +123,10 @@ defmodule TraceGuard.Telemetry do
         else: fields
 
     EventCollector.put_request_fields(fields)
-    EventCollector.record("phoenix.router_dispatch.start", "router", route_metadata(metadata))
+
+    EventCollector.record("phoenix.router_dispatch.start", "router", route_metadata(metadata),
+      span: {:start, :router_dispatch}
+    )
   end
 
   defp handle([:phoenix, :router_dispatch, :stop], measurements, metadata) do
@@ -133,7 +137,8 @@ defmodule TraceGuard.Telemetry do
       "router",
       Map.put(route_metadata(metadata), :status, status),
       duration: measurements[:duration],
-      outcome: "ok"
+      outcome: "ok",
+      span: {:stop, :router_dispatch}
     )
   end
 
@@ -155,7 +160,8 @@ defmodule TraceGuard.Telemetry do
       route_metadata(metadata) |> Map.merge(%{kind: failure.kind, exception: failure.exception}),
       duration: measurements[:duration],
       outcome: "error",
-      lifecycle: true
+      lifecycle: true,
+      span: {:stop, :router_dispatch}
     )
 
     EventCollector.put_failure(failure)

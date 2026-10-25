@@ -12,11 +12,23 @@ defmodule TraceGuard.EventCollector do
         process: "request",           # "request", or "task-N" for propagated work
         name: "ecto.query",
         type: "db",
-        at: -576460748160,            # System.monotonic_time() when observed
+        at: -576460748160,            # System.monotonic_time(), see "Timestamps"
         duration: 1234 | nil,         # native time units, when the source reports one
         outcome: "ok" | "error" | nil,
         metadata: %{...}              # already filtered by the caller
       }
+
+  ## Timestamps
+
+  An event is timestamped when its telemetry handler runs, except the end
+  of a span. Other handlers attached to the same event may run before
+  TraceGuard's and do slow work of their own: error reporters such as
+  ErrorTracker write to the database from their exception handler. Their
+  queries are recorded first, but happened after the exception. So an event
+  recorded with `span: {:stop, key}` is timestamped at the time of the
+  matching `span: {:start, key}` event plus its own `:duration`, the time
+  the span actually ended. Spans of the same key nest, as in a Phoenix
+  router forwarding to another router.
 
   ## Bounding
 
@@ -37,7 +49,8 @@ defmodule TraceGuard.EventCollector do
   @type event_opts :: [
           duration: integer() | nil,
           outcome: String.t() | nil,
-          lifecycle: boolean()
+          lifecycle: boolean(),
+          span: {:start | :stop, atom()}
         ]
 
   @doc """
@@ -56,13 +69,14 @@ defmodule TraceGuard.EventCollector do
 
   defp record_in(%Context{role: :task} = ctx, name, type, metadata, opts) do
     seq = ctx.seq + 1
+    {at, ctx} = timestamp(ctx, opts)
     Context.put(%{ctx | seq: seq})
 
     event = %{
       seq: seq,
       name: name,
       type: type,
-      at: System.monotonic_time(),
+      at: at,
       duration: Keyword.get(opts, :duration),
       outcome: Keyword.get(opts, :outcome),
       metadata: metadata
@@ -79,6 +93,9 @@ defmodule TraceGuard.EventCollector do
   defp record_in(ctx, name, type, metadata, opts) do
     lifecycle? = Keyword.get(opts, :lifecycle, false)
     seq = ctx.seq + 1
+    # Spans are tracked even for dropped events, so that a later lifecycle
+    # event (an exception) still gets its time.
+    {at, ctx} = timestamp(ctx, opts)
 
     if lifecycle? or ctx.retained < Config.get().max_events do
       event = %{
@@ -86,7 +103,7 @@ defmodule TraceGuard.EventCollector do
         process: "request",
         name: name,
         type: type,
-        at: System.monotonic_time(),
+        at: at,
         duration: Keyword.get(opts, :duration),
         outcome: Keyword.get(opts, :outcome),
         metadata: metadata
@@ -98,6 +115,29 @@ defmodule TraceGuard.EventCollector do
     else
       Context.put(%{ctx | seq: seq, dropped: ctx.dropped + 1})
       :dropped
+    end
+  end
+
+  defp timestamp(ctx, opts) do
+    now = System.monotonic_time()
+
+    case Keyword.get(opts, :span) do
+      {:start, key} ->
+        {now, %{ctx | spans: Map.update(ctx.spans, key, [now], &[now | &1])}}
+
+      {:stop, key} ->
+        case ctx.spans do
+          %{^key => [started | open]} ->
+            duration = Keyword.get(opts, :duration)
+            at = if is_integer(duration), do: min(started + duration, now), else: now
+            {at, %{ctx | spans: Map.put(ctx.spans, key, open)}}
+
+          _no_open_span ->
+            {now, ctx}
+        end
+
+      nil ->
+        {now, ctx}
     end
   end
 

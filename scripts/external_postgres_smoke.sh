@@ -10,7 +10,7 @@
 #    *built package* (`mix hex.build --unpack`), not this repository: only
 #    the files that would ship are available. TRACE_GUARD_DEP replaces it
 #    with any dependency options, for example the documented Git-tag form:
-#      TRACE_GUARD_DEP='github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"'
+#      TRACE_GUARD_DEP='github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"'
 # 2. Configure the adapter with the app's existing Repo.
 # 3. Start the app before migrating: TraceGuard must not create its table.
 # 4. Generate the migration (`mix trace_guard.gen.ecto_migration`): it must

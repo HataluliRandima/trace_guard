@@ -3,6 +3,23 @@
 All notable changes. TraceGuard follows [Semantic Versioning](https://semver.org/).
 Before 1.0, minor versions may change the API; changes are listed here.
 
+## 0.1.0-rc.2: experimental preview (GitHub pre-release)
+
+Second release candidate, from the tag `v0.1.0-rc.2`. Still **not on
+Hex**. Install it with
+`{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"}`.
+No API or configuration changes since rc.1.
+
+* **Fixed:** timeline order when another telemetry handler runs before
+  TraceGuard's. Error reporters such as ErrorTracker handle
+  `[:phoenix, :router_dispatch, :exception]` too and query the database
+  from it. Those queries were listed before the exception, and the
+  exception's `offset_us` was late by the reporter's run time. The end of
+  a span (endpoint and router dispatch stop and exception) is now
+  timestamped at its start plus its `duration`. Found by trying the
+  release candidate on an application that uses ErrorTracker.
+* Announcement draft: `docs/announcements/v0.1.0-rc.2.md`.
+
 ## 0.1.0-rc.1: experimental preview (GitHub pre-release)
 
 First release candidate, distributed as a GitHub pre-release from the tag

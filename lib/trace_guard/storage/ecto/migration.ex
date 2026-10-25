@@ -1,7 +1,7 @@
 if Code.ensure_loaded?(Ecto.Migration) do
   defmodule TraceGuard.Storage.Ecto.Migration do
     @moduledoc """
-    **Experimental in 0.1.0-rc.1.** Creates and drops the table used by
+    **Experimental in 0.1.0-rc.2.** Creates and drops the table used by
     `TraceGuard.Storage.Ecto`, from **your application's own migration**.
     TraceGuard never runs migrations itself.
 

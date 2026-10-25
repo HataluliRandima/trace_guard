@@ -310,10 +310,12 @@ avoided anyway, so it doesn't justify changing the writer.
 * **CI policy:** required CI now pins `postgres:16.15` and `postgres:18.6`,
   and `mix hex.audit` moved to the weekly Compatibility workflow, which
   keeps the floating major tags.
-* The release gate is section 0 of
-  [release_checklist.md](release_checklist.md). The runs above tested
-  `882fc9a` only. The release commit needs its own green CI and
-  Compatibility runs before it's tagged.
+* **Released 2026-10-10** as [the pre-release](https://github.com/HataluliRandima/trace_guard/releases/tag/v0.1.0-rc.1), tag `v0.1.0-rc.1` on `67905b6` (the
+  merge of pull request #2). CI [38055935412](https://github.com/HataluliRandima/trace_guard/actions/runs/38055935412) and Compatibility [38057068064](https://github.com/HataluliRandima/trace_guard/actions/runs/38057068064) both passed on
+  that exact commit. Compatibility ran just after publishing rather than
+  before it. Installing the real tag from GitHub in fresh apps passed (4/4
+  without Ecto; 14/14 with the Ecto adapter and migration). The record is
+  in section 0 of [release_checklist.md](release_checklist.md).
 
 ## Recommendation
 

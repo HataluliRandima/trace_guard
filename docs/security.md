@@ -104,12 +104,12 @@ What TraceGuard captures, what it protects, and what it does **not**.
   `report_status/1`. TraceGuard logs nothing per dropped report, so a
   failure storm can't become a log storm.
 
-## Installing from the Git tag (0.1.0-rc.1)
+## Installing from a Git tag (0.1.0 release candidates)
 
 * **A Git tag is mutable on GitHub.** The maintainer could move it, though
-  this project's policy is never to (a fix becomes `v0.1.0-rc.2`). Mix
-  records the resolved commit in your `mix.lock`, and later builds use that
-  commit. To pin explicitly, use `ref: "<commit sha>"` instead of `tag:`.
+  this project's policy is never to (a fix becomes the next release
+  candidate). Mix records the resolved commit in your `mix.lock`, and later
+  builds use that commit. To pin explicitly, use `ref: "<commit sha>"` instead of `tag:`.
 * **A Git dependency fetches the whole repository**, not just `lib/`:
   tests, the demo, scripts and docs. Only `lib/` is compiled into your
   application. The only secrets anywhere in the repository are fake values

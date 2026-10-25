@@ -6,8 +6,8 @@ order, with timings), the work it did in Tasks and GenServer calls you opted
 in, the exception, and what TraceGuard could *not* see. It never changes the
 response or swallows the exception.
 
-**Status: 0.1.0-rc.1, an experimental preview.** It's distributed as a
-GitHub pre-release (tag `v0.1.0-rc.1`), not on Hex. It isn't a promise of
+**Status: 0.1.0-rc.2, an experimental preview.** It's distributed as a
+GitHub pre-release (tag `v0.1.0-rc.2`), not on Hex. It isn't a promise of
 production stability: APIs marked experimental can change before 1.0, and
 there's no production use yet. Tested in CI on Elixir 1.15.8 / OTP 26 to
 Elixir 1.20.1 / OTP 29, Phoenix 1.7 and 1.8, Bandit and Cowboy, and
@@ -40,7 +40,7 @@ From the Git tag (TraceGuard isn't on Hex):
 
 ```elixir
 # mix.exs
-{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.1"}
+{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"}
 ```
 
 ```bash
