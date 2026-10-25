@@ -95,6 +95,53 @@ defmodule TraceGuard.PhoenixIntegrationTest do
     end
   end
 
+  # Regression: error reporters (ErrorTracker, Sentry, ...) handle the same
+  # exception event. When their handler runs first and queries the database,
+  # the exception must still be placed where it happened, before their queries.
+  test "an exception is timed when raised, not when TraceGuard's handler runs" do
+    TraceGuard.Telemetry.detach()
+
+    :telemetry.attach(
+      "test-error-reporter",
+      [:phoenix, :router_dispatch, :exception],
+      &__MODULE__.report_error/4,
+      self()
+    )
+
+    TraceGuard.Telemetry.attach()
+    on_exit(fn -> :telemetry.detach("test-error-reporter") end)
+
+    {500, headers, _} = assert_error_sent(500, fn -> get(build_conn(), "/crash") end)
+    report = fetch_report!(trace_id(headers))
+    assert_received :reported_error
+
+    assert event_names(report) == [
+             "request.start",
+             "phoenix.endpoint.start",
+             "phoenix.router_dispatch.start",
+             "ecto.query",
+             "ecto.query",
+             "phoenix.router_dispatch.exception",
+             "ecto.query",
+             "phoenix.endpoint.stop",
+             "request.stop"
+           ]
+
+    events = Map.new(report["events"], &{{&1["name"], &1["metadata"]["source"]}, &1})
+    exception = events[{"phoenix.router_dispatch.exception", nil}]
+    reporter_query = events[{"ecto.query", "error_tracker_errors"}]
+    assert reporter_query["offset_us"] - exception["offset_us"] >= 20_000
+
+    offsets = Enum.map(report["events"], & &1["offset_us"])
+    assert offsets == Enum.sort(offsets)
+  end
+
+  def report_error(_event, _measurements, _metadata, test_pid) do
+    Process.sleep(20)
+    TraceGuard.TestApp.emit_query("error_tracker_errors")
+    send(test_pid, :reported_error)
+  end
+
   test "successful requests produce no report and leave no context behind" do
     conn = get(build_conn(), "/ok")
     assert %{"ok" => true, "trace_id" => trace_id} = json_response(conn, 200)

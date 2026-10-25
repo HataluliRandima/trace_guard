@@ -44,6 +44,9 @@ defmodule TraceGuard.Context do
     seq: 0,
     retained: 0,
     dropped: 0,
+    # Start times of open telemetry spans, a stack per span (see
+    # TraceGuard.EventCollector.record/4).
+    spans: %{},
     # Task propagation (see TraceGuard.Propagation). `role` is :request in the
     # process that owns the trace and :task in a process running wrapped work.
     role: :request,
@@ -60,6 +63,7 @@ defmodule TraceGuard.Context do
           seq: non_neg_integer(),
           retained: non_neg_integer(),
           dropped: non_neg_integer(),
+          spans: %{optional(atom()) => [integer()]},
           role: :request | :task,
           # Token while the trace is live; a summary map once tasks are merged.
           tasks: TraceGuard.Propagation.Token.t() | :unavailable | map() | nil

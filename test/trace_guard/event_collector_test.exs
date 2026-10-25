@@ -58,6 +58,31 @@ defmodule TraceGuard.EventCollectorTest do
     Context.take()
   end
 
+  test "the end of a span is timed from its start and duration, not when it is observed" do
+    Context.start(Context.generate_trace_id(), %{})
+    ms = &System.convert_time_unit(&1, :millisecond, :native)
+
+    EventCollector.record("outer.start", "t", %{}, span: {:start, :dispatch})
+    EventCollector.record("inner.start", "t", %{}, span: {:start, :dispatch})
+    Process.sleep(20)
+    # Observed about 20 ms after the inner start, but ended 5 ms after it.
+    EventCollector.record("inner.stop", "t", %{}, duration: ms.(5), span: {:stop, :dispatch})
+    EventCollector.record("between", "t", %{})
+    EventCollector.record("outer.stop", "t", %{}, duration: ms.(10), span: {:stop, :dispatch})
+    # No open span left: timed when observed.
+    EventCollector.record("unmatched.stop", "t", %{}, duration: ms.(1), span: {:stop, :dispatch})
+
+    report = TraceBuilder.build(Context.take(), 500, Config.get())
+    offsets = Map.new(report["events"], &{&1["name"], &1["offset_us"]})
+
+    assert Enum.map(report["events"], & &1["name"]) ==
+             ~w(outer.start inner.start inner.stop outer.stop between unmatched.stop)
+
+    assert_in_delta offsets["inner.stop"] - offsets["inner.start"], 5_000, 1_000
+    assert_in_delta offsets["outer.stop"] - offsets["outer.start"], 10_000, 1_000
+    assert offsets["between"] - offsets["inner.start"] >= 20_000
+  end
+
   test "ordinary events are bounded by :max_events; lifecycle events are kept" do
     configure(max_events: 3)
     Context.start(Context.generate_trace_id(), %{})
