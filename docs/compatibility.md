@@ -53,7 +53,9 @@ including PostgreSQL 16 and 18 with nothing excluded. `compat.yml` ran
 manually for the same commit ([run 38042363035](https://github.com/HataluliRandima/trace_guard/actions/runs/38042363035)): all four jobs
 succeeded. **The released commit, `67905b6` (v0.1.0-rc.1),** passed CI
 [38055935412](https://github.com/HataluliRandima/trace_guard/actions/runs/38055935412) (six jobs, pinned PostgreSQL 16.15 and 18.6) and Compatibility [38057068064](https://github.com/HataluliRandima/trace_guard/actions/runs/38057068064)
-(five jobs, including the retired-package audit). Before the first runs,
+(five jobs, including the retired-package audit). **The released commit,
+`5060bfd` (v0.1.0-rc.2),** passed CI
+[40206743041](https://github.com/HataluliRandima/trace_guard/actions/runs/40206743041) and Compatibility [40206940976](https://github.com/HataluliRandima/trace_guard/actions/runs/40206940976). Before the first runs,
 both workflows were linted (`actionlint`
 with `shellcheck`), and every job's `run:` steps were executed locally with
 the job's exact toolchain (see the table below).

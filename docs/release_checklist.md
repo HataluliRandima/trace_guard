@@ -12,19 +12,24 @@ be tagged**. A run on an earlier commit doesn't count for a later one.
 rc.2 fixes the timeline order (see `CHANGELOG.md`). The fix was checked
 in a real application that uses ErrorTracker, through a path dependency.
 
+**Released 2026-10-25:** [the pre-release](https://github.com/HataluliRandima/trace_guard/releases/tag/v0.1.0-rc.2), tag `v0.1.0-rc.2` on `5060bfd` (the merge
+of pull request #4). This time both workflows passed on the release commit
+before publishing. The tag was again created by GitHub's release form, so
+it is lightweight.
+
 | # | Item | Evidence required | Status |
 | --- | --- | --- | --- |
-| 1 | **CI green on the release commit** | a passing `CI` run whose commit is the one to tag | ☐ |
-| 2 | **Real PostgreSQL CI green** | the `PostgreSQL 16.15` and `PostgreSQL 18.6` jobs of that run | ☐ with item 1 |
-| 3 | **Clean install green** | the `Clean install` job of that run | ☐ with item 1 |
-| 4 | **Compatibility green on the release commit** | a manual `Compatibility` run on that commit, finished **before** tagging | ☐ |
-| 5 | **Git-tag installation verified** | a fresh Phoenix app installs `{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"}` | ☐ after tagging (step 9) |
+| 1 | **CI green on the release commit** | a passing `CI` run whose commit is the one to tag | ☑ [40206743041](https://github.com/HataluliRandima/trace_guard/actions/runs/40206743041) on `5060bfd`, all six jobs (finished 15:25 UTC) |
+| 2 | **Real PostgreSQL CI green** | the `PostgreSQL 16.15` and `PostgreSQL 18.6` jobs of that run | ☑ same run |
+| 3 | **Clean install green** | the `Clean install` job of that run | ☑ same run |
+| 4 | **Compatibility green on the release commit** | a manual `Compatibility` run on that commit, finished **before** tagging | ☑ [40206940976](https://github.com/HataluliRandima/trace_guard/actions/runs/40206940976) on `5060bfd`, all five jobs (finished 15:27 UTC; published 15:33 UTC). The previous run, on `f9e843b`, failed the audit job: advisories for `decimal` 3.1.1 and `plug_crypto` 2.2.0, fixed by `74e3b0b`. The weekly runs on rc.1 (2026-10-12 and 2026-10-19) had failed on the same audit unnoticed |
+| 5 | **Git-tag installation verified** | a fresh Phoenix app installs `{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"}` | ☑ after publishing, from GitHub: app without Ecto 4/4; PostgreSQL 16 app with the Ecto adapter and migration 14/14; both lock files record `5060bfd` |
 | 6 | **Supported toolchain documented** | [compatibility.md](compatibility.md) matches the CI matrix | ☑ unchanged since rc.1 |
 | 7 | **Security limitations disclosed** | [security.md](security.md) | ☑ unchanged since rc.1 |
 | 8 | **Experimental API boundaries clear** | ExDoc groups and module docs | ☑ unchanged since rc.1 |
-| 9 | **Release notes ready** | the `CHANGELOG.md` entry and the announcement (`docs/announcements/v0.1.0-rc.2.md`) | ☐ drafted; maintainer review |
-| 10 | **Tag exists** | `v0.1.0-rc.2` points at the release commit | ☐ maintainer action |
-| 11 | **Pre-release published** | a GitHub release, marked pre-release, from that tag | ☐ maintainer action |
+| 9 | **Release notes ready** | the `CHANGELOG.md` entry and the announcement (`docs/announcements/v0.1.0-rc.2.md`) | ☑ the announcement is the pre-release's text |
+| 10 | **Tag exists** | `v0.1.0-rc.2` points at the release commit | ☑ `5060bfd` (a lightweight tag) |
+| 11 | **Pre-release published** | a GitHub release, marked pre-release, from that tag | ☑ 2026-10-25 15:33 UTC |
 
 ### Record: 0.1.0-rc.1
 
