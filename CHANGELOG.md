@@ -19,6 +19,10 @@ No API or configuration changes since rc.1.
   timestamped at its start plus its `duration`. Found by trying the
   release candidate on an application that uses ErrorTracker.
 * Announcement draft: `docs/announcements/v0.1.0-rc.2.md`.
+* Development lock files: `decimal` 3.1.1 → 3.2.0 and `plug_crypto`
+  2.2.0 → 2.2.1, for advisories EEF-CVE-2026-97853 and
+  EEF-CVE-2026-105963 reported by `mix hex.audit`. Lock files aren't used by
+  applications that depend on TraceGuard: check your own `mix.lock`.
 
 ## 0.1.0-rc.1: experimental preview (GitHub pre-release)
 
