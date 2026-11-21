@@ -268,11 +268,21 @@ defmodule TraceGuard.Propagation do
   end
 
   @doc false
-  def accepting?(%Token{} = token, max_events),
-    do: :atomics.get(token.counter, @sent) < max_events
+  # accepting?/2 and count_dropped/1 are called from telemetry handlers in
+  # application code, so like send_event/4 they fail closed instead of
+  # raising on an unusable budget.
+  def accepting?(%Token{} = token, max_events) do
+    :atomics.get(token.counter, @sent) < max_events
+  rescue
+    ArgumentError -> false
+  end
 
   @doc false
-  def count_dropped(%Token{} = token), do: :atomics.add(token.counter, @dropped, 1)
+  def count_dropped(%Token{} = token) do
+    :atomics.add(token.counter, @dropped, 1)
+  rescue
+    ArgumentError -> :ok
+  end
 
   ## Used when the owning request completes
 

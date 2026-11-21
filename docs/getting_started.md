@@ -5,17 +5,19 @@ through investigating a failed request.
 
 ## 1. Add the dependency
 
-TraceGuard 0.1.0-rc.2 is an experimental preview, installed from its Git
-tag (it isn't on Hex):
+TraceGuard is on [Hex](https://hex.pm/packages/trace_guard):
 
 ```elixir
 # mix.exs
 defp deps do
   [
-    {:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"}
+    {:trace_guard, "~> 0.1.0"}
   ]
 end
 ```
+
+Before 1.0, a minor version (0.2) may change the APIs marked experimental,
+so `~> 0.1.0` only accepts patch releases.
 
 ```bash
 mix deps.get

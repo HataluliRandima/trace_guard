@@ -1,0 +1,58 @@
+name: Bug report
+description: Something TraceGuard does differently from its documentation.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Don't paste real secrets, customer data or unredacted logs.** Use fake values: they show where a secret leaks just as well.
+        For a security vulnerability, don't open an issue: follow [SECURITY.md](https://github.com/HataluliRandima/trace_guard/blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest configuration, route or code that shows it. A report's JSON (redacted) helps.
+      render: elixir
+  - type: input
+    id: trace-guard-version
+    attributes:
+      label: TraceGuard version
+      description: From `mix.lock`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: toolchain
+    attributes:
+      label: Elixir and OTP versions
+      description: The output of `elixir --version`.
+      placeholder: "Elixir 1.17.0 / OTP 26"
+    validations:
+      required: true
+  - type: input
+    id: phoenix
+    attributes:
+      label: Phoenix version and web server
+      placeholder: "Phoenix 1.8.1, Bandit 1.6"
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Storage adapter
+      options:
+        - In memory (default)
+        - SQLite
+        - Ecto/PostgreSQL
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Your `:trace_guard` configuration
+      render: elixir

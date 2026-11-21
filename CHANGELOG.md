@@ -3,6 +3,33 @@
 All notable changes. TraceGuard follows [Semantic Versioning](https://semver.org/).
 Before 1.0, minor versions may change the API; changes are listed here.
 
+## 0.1.0 (unreleased): first Hex release
+
+The first version published on [Hex](https://hex.pm/packages/trace_guard).
+Install it with `{:trace_guard, "~> 0.1.0"}`. No API or configuration
+changes since rc.2, and reports keep the `traceguard.report/v1` schema.
+`TraceGuard.Server`, `TraceGuard.Storage` and its adapters, and the
+migration module and task remain experimental and may change in a minor
+version before 1.0.
+
+* **Upgrading from a release candidate:** replace the `github:` dependency
+  with `{:trace_guard, "~> 0.1.0"}` and run `mix deps.get`. The release
+  candidates are no longer supported.
+* **Fixed:** an Ecto query in a `TraceGuard.Server` callback whose trace
+  token carried an unusable event budget (for example, a token from another
+  node) logged "TraceGuard ignored an internal error" with a stack trace,
+  once per query. The query is now counted as dropped without logging, as
+  task and server events already were.
+* `SECURITY.md`: supported versions and how to report a vulnerability
+  privately. Also new: `CONTRIBUTING.md`, issue forms (bug report, feature
+  request) and a pull request template.
+* A failed **scheduled** Compatibility run now opens an issue (or comments
+  on the open one), so a `mix hex.audit` advisory can't go unnoticed again.
+* HexDocs no longer include the phase reviews and the release checklist,
+  which are maintainer notes. They remain in the repository.
+* Installation docs (README, getting started, security notes) describe the
+  Hex package instead of the Git tag.
+
 ## 0.1.0-rc.2: experimental preview (GitHub pre-release)
 
 Second release candidate, from the tag `v0.1.0-rc.2`. Still **not on

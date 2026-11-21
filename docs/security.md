@@ -104,16 +104,21 @@ What TraceGuard captures, what it protects, and what it does **not**.
   `report_status/1`. TraceGuard logs nothing per dropped report, so a
   failure storm can't become a log storm.
 
-## Installing from a Git tag (0.1.0 release candidates)
+## Installing the package
 
-* **A Git tag is mutable on GitHub.** The maintainer could move it, though
-  this project's policy is never to (a fix becomes the next release
-  candidate). Mix records the resolved commit in your `mix.lock`, and later
-  builds use that commit. To pin explicitly, use `ref: "<commit sha>"` instead of `tag:`.
-* **A Git dependency fetches the whole repository**, not just `lib/`:
-  tests, the demo, scripts and docs. Only `lib/` is compiled into your
-  application. The only secrets anywhere in the repository are fake values
-  planted by the tests.
+* **The Hex package contains only `lib/`** and five top-level files
+  (`mix.exs`, `.formatter.exs`, `README.md`, `LICENSE`, `CHANGELOG.md`):
+  no tests, demo, scripts, databases or build artefacts.
+  `scripts/package_check.sh` enforces that in CI.
+* **`mix.lock` records the package's checksum**, and Mix verifies it on
+  every fetch, so a version you've locked can't change underneath you.
+* **Retired versions:** if a version has to be withdrawn, it's retired on
+  Hex with a reason, and `mix hex.audit` reports it in your application.
+  Fixes are released as a new version, never by replacing one.
+* **The 0.1.0 release candidates** were installed from Git tags
+  (`v0.1.0-rc.*`). A Git dependency fetches the whole repository, and a
+  tag can be moved on GitHub, though this project never does. They are no
+  longer supported: switch to `{:trace_guard, "~> 0.1.0"}`.
 * **Dropped reports are expected under pressure.** Queue saturation and
   storage failures drop diagnostic reports, and record each drop (see
   [storage.md](storage.md)). Don't rely on TraceGuard as an audit log.
@@ -121,7 +126,9 @@ What TraceGuard captures, what it protects, and what it does **not**.
 ## Continuous integration (Phase 7)
 
 * Workflows have `permissions: contents: read` and use no secrets. Nothing
-  in CI can publish, tag or push.
+  in CI can publish, tag or push. The one exception is the `notify` job in
+  `compat.yml`: it gets `issues: write` (and nothing else) to open or
+  comment on an issue when a scheduled run fails.
 * Third-party actions are pinned to commit SHAs (the tag is in a comment).
   Required CI pins PostgreSQL images to exact minor tags; the weekly
   workflow uses the floating major tags (Phase 8, see
@@ -146,5 +153,9 @@ Unknown or ill-typed `:trace_guard` options raise at boot. `TraceGuard.Storage.S
 
 ## Reporting a vulnerability
 
-Please report security issues privately to the maintainer through the
-GitHub repository's security advisories, rather than in a public issue.
+Please report security issues privately, rather than in a public issue:
+in the repository's
+[Security tab](https://github.com/HataluliRandima/trace_guard/security),
+choose **Report a vulnerability**. The
+[security policy](https://github.com/HataluliRandima/trace_guard/blob/main/SECURITY.md)
+lists the supported versions and what to include.
