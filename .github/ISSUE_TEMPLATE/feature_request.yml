@@ -1,0 +1,25 @@
+name: Feature request
+description: Something TraceGuard should capture or do that it doesn't.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        TraceGuard deliberately stays small (no function tracing, implicit propagation or network calls). See "Before you start" in [CONTRIBUTING.md](https://github.com/HataluliRandima/trace_guard/blob/main/CONTRIBUTING.md#before-you-start).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to find out from a report, and what was missing or got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: How you'd like TraceGuard to help. Rough ideas are fine.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today
+      description: Workarounds you use now, if any.

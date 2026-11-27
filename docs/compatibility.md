@@ -45,7 +45,10 @@ dependency resolution, and `mix hex.audit` for retired packages.
 "elixir117-otp27" (PostgreSQL 16) and "latest" (Elixir 1.20.1 / OTP 29.0,
 PostgreSQL 18), on the floating major tags; `scripts/external_smoke.sh`
 with Bandit and Cowboy × memory and SQLite on Elixir 1.17.1 / OTP 27.0; and
-`mix hex.audit` on the locked dependencies.
+`mix hex.audit` on the locked dependencies. When a **scheduled** run
+fails, its `notify` job opens an issue titled "Weekly compatibility run
+failed" (or comments on the open one) and mentions the maintainer. Close
+the issue once the fix is merged.
 
 **Status (remote runs; each tested only its own commit):** `ci.yml` first ran on GitHub for `882fc9a`
 ([run 38040243638](https://github.com/HataluliRandima/trace_guard/actions/runs/38040243638)), and all six jobs succeeded,

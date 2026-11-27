@@ -1,7 +1,7 @@
 defmodule TraceGuard.MixProject do
   use Mix.Project
 
-  @version "0.1.0-rc.2"
+  @version "0.1.0"
   @source_url "https://github.com/HataluliRandima/trace_guard"
 
   def project do
@@ -77,14 +77,7 @@ defmodule TraceGuard.MixProject do
         "docs/storage.md",
         "docs/security.md",
         "docs/performance.md",
-        "docs/compatibility.md",
-        "docs/release_checklist.md",
-        "docs/phase2_review.md",
-        "docs/phase3_review.md",
-        "docs/phase4_review.md",
-        "docs/phase5_review.md",
-        "docs/phase6_review.md",
-        "docs/phase7_review.md"
+        "docs/compatibility.md"
       ],
       groups_for_extras: [
         Guides: [
@@ -98,16 +91,7 @@ defmodule TraceGuard.MixProject do
           "docs/architecture.md",
           "docs/security.md",
           "docs/performance.md",
-          "docs/compatibility.md",
-          "docs/release_checklist.md"
-        ],
-        "Development history": [
-          "docs/phase2_review.md",
-          "docs/phase3_review.md",
-          "docs/phase4_review.md",
-          "docs/phase5_review.md",
-          "docs/phase6_review.md",
-          "docs/phase7_review.md"
+          "docs/compatibility.md"
         ]
       ],
       groups_for_modules: [

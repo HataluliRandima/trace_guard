@@ -6,13 +6,13 @@ order, with timings), the work it did in Tasks and GenServer calls you opted
 in, the exception, and what TraceGuard could *not* see. It never changes the
 response or swallows the exception.
 
-**Status: 0.1.0-rc.2, an experimental preview.** It's distributed as a
-GitHub pre-release (tag `v0.1.0-rc.2`), not on Hex. It isn't a promise of
-production stability: APIs marked experimental can change before 1.0, and
-there's no production use yet. Tested in CI on Elixir 1.15.8 / OTP 26 to
-Elixir 1.20.1 / OTP 29, Phoenix 1.7 and 1.8, Bandit and Cowboy, and
-PostgreSQL 16 and 18, on Linux only. See [Limitations](#limitations) and
-[docs/compatibility.md](docs/compatibility.md).
+**Status: 0.1.0, an early release on [Hex](https://hex.pm/packages/trace_guard).**
+Before 1.0, APIs marked experimental (GenServer propagation and the storage
+adapters) can change in a minor version; every change is listed in the
+[changelog](CHANGELOG.md). There's no production use yet. Tested in CI on
+Elixir 1.15.8 / OTP 26 to Elixir 1.20.1 / OTP 29, Phoenix 1.7 and 1.8,
+Bandit and Cowboy, and PostgreSQL 16 and 18, on Linux only. See
+[Limitations](#limitations) and [docs/compatibility.md](docs/compatibility.md).
 
 Feedback is welcome, especially on integration friction, the database
 migration experience and compatibility:
@@ -36,19 +36,17 @@ calls. It records the events listed in the report, nothing more.
 
 ## Install
 
-From the Git tag (TraceGuard isn't on Hex):
-
 ```elixir
 # mix.exs
-{:trace_guard, github: "HataluliRandima/trace_guard", tag: "v0.1.0-rc.2"}
+{:trace_guard, "~> 0.1.0"}
 ```
 
 ```bash
 mix deps.get
 ```
 
-`mix.lock` then records the exact commit, so later builds can't change
-underneath you. For the optional adapters, see [Storage](#retrieving-reports):
+`~> 0.1.0` accepts patch releases (0.1.x) but not 0.2, which may change
+experimental APIs. For the optional adapters, see [Storage](#retrieving-reports):
 SQLite needs `{:exqlite, "~> 0.42"}`; Ecto/PostgreSQL uses the `ecto_sql`
 and `postgrex` your application already has.
 
@@ -219,7 +217,7 @@ seven planted secrets appear in them. See [demo/README.md](https://github.com/Ha
 ## Development
 
 ```bash
-mix test                          # library (175 tests + 1 doctest; the 21 PostgreSQL tests are excluded without a server)
+mix test                          # library (177 tests + 1 doctest; the 21 PostgreSQL tests are excluded without a server)
 (cd demo && mix test)             # demo application (16 tests)
 scripts/compat_matrix.sh          # library on several Elixir/OTP/dependency versions
 scripts/external_smoke.sh         # a fresh Phoenix app integrating TraceGuard (Bandit/Cowboy x memory/SQLite)
@@ -235,9 +233,13 @@ CI (GitHub Actions, `.github/workflows/`) is configured to run these checks
 on every pull request, with real PostgreSQL 16 and 18 services, and a
 weekly workflow for the other toolchain rows and Cowboy. See [docs/compatibility.md](docs/compatibility.md#continuous-integration).
 
-The release procedure is in [docs/release_checklist.md](docs/release_checklist.md),
+How to contribute is in
+[CONTRIBUTING.md](https://github.com/HataluliRandima/trace_guard/blob/main/CONTRIBUTING.md),
+the release procedure in
+[docs/release_checklist.md](https://github.com/HataluliRandima/trace_guard/blob/main/docs/release_checklist.md),
 the history in [CHANGELOG.md](CHANGELOG.md), and design notes in
-[docs/architecture.md](docs/architecture.md) and the phase reviews.
+[docs/architecture.md](docs/architecture.md) and the
+[phase reviews](https://github.com/HataluliRandima/trace_guard/tree/main/docs).
 
 ## License
 

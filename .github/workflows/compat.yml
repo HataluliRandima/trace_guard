@@ -109,3 +109,39 @@ jobs:
           name: external-smoke-logs
           path: ${{ runner.temp }}/external/*.log
           retention-days: 7
+
+  # Scheduled runs have no one watching them: the audit failed two weeks in a
+  # row before anyone noticed. A failure opens an issue (or comments on the
+  # open one), which notifies the maintainer. Manual runs are watched by
+  # whoever started them, so they don't open issues.
+  notify:
+    name: Open an issue when the weekly run fails
+    needs: [matrix, audit, external]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # The only job with more than read access, and only to issues.
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+          RESULTS: "matrix: ${{ needs.matrix.result }}, audit: ${{ needs.audit.result }}, external: ${{ needs.external.result }}"
+        run: |
+          title="Weekly compatibility run failed"
+          body="The scheduled Compatibility run on \`${SHA:0:7}\` failed: $RUN_URL
+
+          Jobs: $RESULTS
+
+          A failed \`audit\` job usually means a security advisory for a locked dependency (\`mix hex.audit\`). @$OWNER"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

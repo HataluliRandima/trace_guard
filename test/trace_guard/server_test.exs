@@ -194,14 +194,21 @@ defmodule TraceGuard.ServerTest do
 
   test "a token whose budget is unusable never breaks the server callback" do
     # Simulates a token from another node (whose :atomics ref is invalid
-    # here): recording must fail closed, not raise in handle_call/3.
+    # here): recording must fail closed, not raise in handle_call/3, and
+    # not log an internal error for every query in the callback.
     Context.start(Context.generate_trace_id(), %{})
     token = TraceGuard.Propagation.capture()
     broken = %{token | counter: make_ref()}
 
-    assert GenServer.call(PricingServer, {TraceGuard.Server, broken, {:quote, "broken", nil}}) ==
-             {:ok, "broken"}
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert GenServer.call(
+                 PricingServer,
+                 {TraceGuard.Server, broken, {:quote, "broken", nil}}
+               ) == {:ok, "broken"}
+      end)
 
+    refute log =~ "TraceGuard ignored an internal error"
     assert GenServer.call(PricingServer, :plain) == :plain
   end
 

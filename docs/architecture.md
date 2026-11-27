@@ -245,4 +245,4 @@ from Phase 2 `task.start`, `task.stop`, `task.exception`, and from Phase 4
   `:task_drain_timeout`.
 * Measured overhead and the proposed budget are in
   [performance.md](performance.md). The full bounds review is in
-  [phase2_review.md](phase2_review.md).
+  [phase2_review.md](https://github.com/HataluliRandima/trace_guard/blob/main/docs/phase2_review.md).
