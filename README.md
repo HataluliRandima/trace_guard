@@ -1,5 +1,10 @@
 # TraceGuard
 
+[![CI](https://img.shields.io/github/actions/workflow/status/HataluliRandima/trace_guard/ci.yml?branch=main&label=CI&logo=github)](https://github.com/HataluliRandima/trace_guard/actions/workflows/ci.yml)
+[![Hex.pm](https://img.shields.io/hexpm/v/trace_guard.svg)](https://hex.pm/packages/trace_guard)
+[![HexDocs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/trace_guard)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/HataluliRandima/trace_guard/blob/main/LICENSE)
+
 When a Phoenix request fails, TraceGuard gives you a **redacted diagnostic
 report for that one request**: the route, the Ecto queries it ran (in
 order, with timings), the work it did in Tasks and GenServer calls you opted
