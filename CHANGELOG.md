@@ -3,7 +3,7 @@
 All notable changes. TraceGuard follows [Semantic Versioning](https://semver.org/).
 Before 1.0, minor versions may change the API; changes are listed here.
 
-## 0.1.0 (unreleased): first Hex release
+## 0.1.0 (2026-11-27): first Hex release
 
 The first version published on [Hex](https://hex.pm/packages/trace_guard).
 Install it with `{:trace_guard, "~> 0.1.0"}`. No API or configuration
@@ -29,6 +29,12 @@ version before 1.0.
   which are maintainer notes. They remain in the repository.
 * Installation docs (README, getting started, security notes) describe the
   Hex package instead of the Git tag.
+* README badges: CI, Hex version, HexDocs and license.
+* Development lock files (library and demo): `ecto` 3.14.2 → 3.14.3,
+  `db_connection` 2.10.2 → 2.10.3, `plug` 1.20.3 → 1.20.4, `phoenix`
+  1.8.15 → 1.8.17 and, in the demo, `bandit` 1.12.5 → 1.15.0, for the
+  advisories reported by `mix hex.audit`. Lock files aren't used by
+  applications that depend on TraceGuard: check your own `mix.lock`.
 
 ## 0.1.0-rc.2: experimental preview (GitHub pre-release)
 
